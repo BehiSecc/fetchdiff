@@ -27,6 +27,36 @@ func TestHelpDoesNotCreateState(t *testing.T) {
 	}
 }
 
+func TestInitIsIdempotentAndPreservesProviders(t *testing.T) {
+	dataDir := filepath.Join(t.TempDir(), "state")
+	run := func() string {
+		t.Helper()
+		var output bytes.Buffer
+		command := newRootCommand(&output, &output)
+		command.SetArgs([]string{"--data-dir", dataDir, "init"})
+		if err := command.Execute(); err != nil {
+			t.Fatalf("init: %v\n%s", err, output.String())
+		}
+		return output.String()
+	}
+	if output := run(); !strings.Contains(output, "FetchDiff initialized") {
+		t.Fatalf("init output:\n%s", output)
+	}
+	providers := filepath.Join(dataDir, "providers.yaml")
+	const custom = "# keep this\n"
+	if err := os.WriteFile(providers, []byte(custom), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	run()
+	content, err := os.ReadFile(providers)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != custom {
+		t.Fatalf("providers file was overwritten: %q", content)
+	}
+}
+
 func TestParseHeaders(t *testing.T) {
 	headers, err := parseHeaders([]string{"Authorization: Bearer value", "X-Test: yes"})
 	if err != nil {

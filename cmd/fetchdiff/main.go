@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -22,6 +23,7 @@ import (
 	"github.com/BehiSecc/fetchdiff/internal/notifier"
 	"github.com/BehiSecc/fetchdiff/internal/schedule"
 	"github.com/BehiSecc/fetchdiff/internal/store"
+	"github.com/BehiSecc/fetchdiff/internal/systemd"
 	"github.com/spf13/cobra"
 )
 
@@ -73,6 +75,7 @@ func newRootCommand(out, errOut io.Writer) *cobra.Command {
 	root.PersistentFlags().IntVar(&c.redirects, "max-redirects", fetch.DefaultMaxRedirects, "maximum redirects per request")
 	root.PersistentFlags().StringVar(&c.userAgent, "user-agent", fetch.DefaultUserAgent, "HTTP User-Agent header")
 	root.AddCommand(
+		c.initCommand(),
 		c.addCommand(),
 		c.checkCommand(),
 		c.watchCommand(),
@@ -82,8 +85,73 @@ func newRootCommand(out, errOut io.Writer) *cobra.Command {
 		c.statusCommand(),
 		c.doctorCommand(),
 		c.notifyTestCommand(),
+		c.serviceCommand(),
 	)
 	return root
+}
+
+func (c *cli) initCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "init",
+		Short: "Initialize FetchDiff storage and provider configuration",
+		Args:  cobra.NoArgs,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			paths, err := config.ResolvePaths(c.dataDir)
+			if err != nil {
+				return err
+			}
+			if err := store.New(paths).Initialize(); err != nil {
+				return err
+			}
+			fmt.Fprintf(c.out, "✓ FetchDiff initialized\n\nState: %s\nProviders: %s\n", paths.Root, paths.Providers)
+			return nil
+		},
+	}
+}
+
+func (c *cli) serviceCommand() *cobra.Command {
+	service := &cobra.Command{
+		Use:   "service",
+		Short: "Manage the systemd service",
+		Long:  "Manage the system-wide FetchDiff systemd service. One FetchDiff service user is supported per host.",
+	}
+	var userName string
+	var enable bool
+	var force bool
+	install := &cobra.Command{
+		Use:   "install",
+		Short: "Install the systemd unit for a non-root user",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if goruntime.GOOS != "linux" {
+				return errors.New("systemd service installation is supported only on Linux")
+			}
+			if os.Geteuid() != 0 {
+				return errors.New("service installation requires root; run this command with sudo")
+			}
+			result, err := systemd.Install(cmd.Context(), systemd.InstallOptions{UserName: userName, Enable: enable, Force: force})
+			if err != nil {
+				return err
+			}
+			verb := "already up to date"
+			if result.Changed {
+				verb = "installed"
+			}
+			fmt.Fprintf(c.out, "✓ FetchDiff service %s\n\nUnit: %s\nUser: %s\n", verb, result.UnitPath, result.User)
+			if result.Enabled {
+				fmt.Fprintln(c.out, "Status: enabled and running")
+			} else {
+				fmt.Fprintln(c.out, "Next: sudo systemctl enable --now fetchdiff")
+			}
+			return nil
+		},
+	}
+	install.Flags().StringVar(&userName, "user", "", "non-root user that owns ~/.fetchdiff")
+	install.Flags().BoolVar(&enable, "enable", false, "enable and start or restart the service")
+	install.Flags().BoolVar(&force, "force", false, "replace a different existing FetchDiff unit")
+	_ = install.MarkFlagRequired("user")
+	service.AddCommand(install)
+	return service
 }
 
 func (c *cli) open() (*runtime, error) {
