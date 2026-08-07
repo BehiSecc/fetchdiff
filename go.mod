@@ -1,4 +1,4 @@
-module github.com/fetchdiff/fetchdiff
+module github.com/BehiSecc/fetchdiff
 
 go 1.25.0
 

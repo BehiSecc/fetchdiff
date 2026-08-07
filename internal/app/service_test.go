@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fetchdiff/fetchdiff/internal/config"
-	"github.com/fetchdiff/fetchdiff/internal/fetch"
-	"github.com/fetchdiff/fetchdiff/internal/model"
-	"github.com/fetchdiff/fetchdiff/internal/store"
+	"github.com/BehiSecc/fetchdiff/internal/config"
+	"github.com/BehiSecc/fetchdiff/internal/fetch"
+	"github.com/BehiSecc/fetchdiff/internal/model"
+	"github.com/BehiSecc/fetchdiff/internal/store"
 )
 
 type fetchStep struct {

@@ -12,12 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fetchdiff/fetchdiff/internal/compare"
-	"github.com/fetchdiff/fetchdiff/internal/extract"
-	"github.com/fetchdiff/fetchdiff/internal/fetch"
-	"github.com/fetchdiff/fetchdiff/internal/model"
-	"github.com/fetchdiff/fetchdiff/internal/schedule"
-	"github.com/fetchdiff/fetchdiff/internal/store"
+	"github.com/BehiSecc/fetchdiff/internal/compare"
+	"github.com/BehiSecc/fetchdiff/internal/extract"
+	"github.com/BehiSecc/fetchdiff/internal/fetch"
+	"github.com/BehiSecc/fetchdiff/internal/model"
+	"github.com/BehiSecc/fetchdiff/internal/schedule"
+	"github.com/BehiSecc/fetchdiff/internal/store"
 )
 
 const FailureThreshold = 3

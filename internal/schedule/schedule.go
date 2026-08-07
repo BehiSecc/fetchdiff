@@ -3,7 +3,7 @@ package schedule
 import (
 	"time"
 
-	"github.com/fetchdiff/fetchdiff/internal/model"
+	"github.com/BehiSecc/fetchdiff/internal/model"
 )
 
 func Due(target model.Target, now time.Time) bool {

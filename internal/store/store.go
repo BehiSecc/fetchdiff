@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fetchdiff/fetchdiff/internal/config"
-	"github.com/fetchdiff/fetchdiff/internal/model"
+	"github.com/BehiSecc/fetchdiff/internal/config"
+	"github.com/BehiSecc/fetchdiff/internal/model"
 	bolt "go.etcd.io/bbolt"
 )
 

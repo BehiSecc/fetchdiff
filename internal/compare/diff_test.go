@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fetchdiff/fetchdiff/internal/model"
+	"github.com/BehiSecc/fetchdiff/internal/model"
 )
 
 func TestBuildBeautifiedJavaScriptDiff(t *testing.T) {

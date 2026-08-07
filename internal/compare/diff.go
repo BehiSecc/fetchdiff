@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/fetchdiff/fetchdiff/internal/extract"
+	"github.com/BehiSecc/fetchdiff/internal/extract"
 	"github.com/pmezard/go-difflib/difflib"
 )
 

@@ -9,8 +9,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/BehiSecc/fetchdiff/internal/model"
 	"github.com/evanw/esbuild/pkg/api"
-	"github.com/fetchdiff/fetchdiff/internal/model"
 	"github.com/yosssi/gohtml"
 )
 

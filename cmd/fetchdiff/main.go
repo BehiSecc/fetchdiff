@@ -15,12 +15,12 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/fetchdiff/fetchdiff/internal/app"
-	"github.com/fetchdiff/fetchdiff/internal/config"
-	"github.com/fetchdiff/fetchdiff/internal/fetch"
-	"github.com/fetchdiff/fetchdiff/internal/model"
-	"github.com/fetchdiff/fetchdiff/internal/schedule"
-	"github.com/fetchdiff/fetchdiff/internal/store"
+	"github.com/BehiSecc/fetchdiff/internal/app"
+	"github.com/BehiSecc/fetchdiff/internal/config"
+	"github.com/BehiSecc/fetchdiff/internal/fetch"
+	"github.com/BehiSecc/fetchdiff/internal/model"
+	"github.com/BehiSecc/fetchdiff/internal/schedule"
+	"github.com/BehiSecc/fetchdiff/internal/store"
 	"github.com/spf13/cobra"
 )
 

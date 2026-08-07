@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fetchdiff/fetchdiff/internal/model"
+	"github.com/BehiSecc/fetchdiff/internal/model"
 )
 
 func TestNextWake(t *testing.T) {

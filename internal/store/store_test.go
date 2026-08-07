@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fetchdiff/fetchdiff/internal/config"
-	"github.com/fetchdiff/fetchdiff/internal/model"
+	"github.com/BehiSecc/fetchdiff/internal/config"
+	"github.com/BehiSecc/fetchdiff/internal/model"
 )
 
 func newTestStore(t *testing.T) *Store {
