@@ -405,8 +405,16 @@ func changeMessage(previous, target model.Target, entry model.HistoryEntry, diff
 }
 
 func failureMessage(target model.Target, entry model.HistoryEntry) string {
-	return fmt.Sprintf("❌ Check failed · %s\n\n%s\n\nConsecutive failures: %d\nError: %s\nLast good hash: %s\nChecked: %s",
-		target.Name, target.URL, target.ConsecutiveFailures, entry.Error, shortHash(target.SnapshotHash), displayTime(entry.CheckedAt))
+	var output strings.Builder
+	fmt.Fprintf(&output, "❌ Check failed · %s\n\n%s\n\nConsecutive failures: %d\nError: %s\n", target.Name, target.URL, target.ConsecutiveFailures, entry.Error)
+	if entry.StatusChanged {
+		fmt.Fprintf(&output, "Status: %d → %d\n", entry.PreviousStatusCode, entry.StatusCode)
+	}
+	if entry.RedirectChanged {
+		fmt.Fprintf(&output, "Redirect: %s → %s\n", entry.PreviousURL, entry.EffectiveURL)
+	}
+	fmt.Fprintf(&output, "Last good hash: %s\nChecked: %s", shortHash(target.SnapshotHash), displayTime(entry.CheckedAt))
+	return output.String()
 }
 
 func recoveryMessage(target model.Target, entry model.HistoryEntry) string {

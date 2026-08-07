@@ -1,6 +1,6 @@
 # FetchDiff
 
-FetchDiff monitors remote JavaScript and web pages for content changes. It keeps exact snapshots, checks URLs on a schedule, and prints readable full diffs—even for minified JavaScript and HTML.
+FetchDiff monitors remote JavaScript and web pages for changes. It keeps exact snapshots, checks URLs on a schedule, prints readable full diffs, and can notify Slack, Discord, Telegram, email, and other providers.
 
 ## Installation
 
@@ -9,7 +9,45 @@ go install github.com/BehiSecc/fetchdiff/cmd/fetchdiff@latest
 sudo ln -s "$(go env GOPATH)/bin/fetchdiff" /usr/local/bin/fetchdiff
 ```
 
-To run FetchDiff continuously, create `/etc/systemd/system/fetchdiff.service` and replace `YOUR_USER` with your Linux username:
+Add a URL. The first fetch becomes its baseline:
+
+```sh
+fetchdiff add https://cdn.example.com/app.js \
+  --name production-js \
+  --every 24h
+```
+
+FetchDiff stores its private database, snapshots, and provider configuration under `~/.fetchdiff`.
+
+## Notifications
+
+The first FetchDiff command creates a commented template at:
+
+```text
+~/.fetchdiff/providers.yaml
+```
+
+Edit that file and uncomment only the providers you use. It follows the ProjectDiscovery Notify format and is protected with `0600` permissions.
+
+If Notify is already configured, copy its configuration directly:
+
+```sh
+cp ~/.config/notify/provider-config.yaml ~/.fetchdiff/providers.yaml
+chmod 600 ~/.fetchdiff/providers.yaml
+fetchdiff notify-test
+```
+
+Test a specific destination when needed:
+
+```sh
+fetchdiff notify-test --provider discord --id crawl
+```
+
+Slack, Discord, Telegram, Pushover, SMTP, Google Chat, Teams, Gotify, and custom webhooks are supported. FetchDiff sends change, third-failure, recovery, status, and redirect alerts. Failed deliveries stay queued and retry without fetching the target again.
+
+## Run continuously
+
+Create `/etc/systemd/system/fetchdiff.service` and replace `YOUR_USER` with your Linux username:
 
 ```ini
 [Unit]
@@ -36,20 +74,17 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now fetchdiff
 ```
 
-## Examples
-
-Add a URL and create its initial snapshot:
+Restart the service after changing `providers.yaml`:
 
 ```sh
-fetchdiff add https://cdn.example.com/app.js \
-  --name production-js \
-  --every 24h
+sudo systemctl restart fetchdiff
 ```
 
-Inspect or check targets:
+## Common commands
 
 ```sh
 fetchdiff list
+fetchdiff check
 fetchdiff check production-js --force
 fetchdiff history production-js
 fetchdiff diff production-js
@@ -57,37 +92,15 @@ fetchdiff status
 fetchdiff doctor
 ```
 
-Run the scheduler directly instead of using systemd:
-
-```sh
-fetchdiff watch
-```
-
-For cron, systemd, or CI, check due targets once and exit:
-
-```sh
-fetchdiff check
-```
+`fetchdiff check` checks due targets once and exits, which is useful for cron or CI. `fetchdiff watch` runs the scheduler continuously.
 
 ## Useful flags
 
-- `--name production-js` sets the target's unique name.
-- `--every 24h` sets its interval. Durations use values such as `30m`, `6h`, or `24h`.
-- `--header "Name: value"` stores a request header with the target and can be repeated.
-- `check NAME --force` checks a target immediately instead of waiting until it is due.
-- `history NAME --limit 50` controls displayed history; use `--limit 0` for all entries.
-- `--timeout 30s` sets the timeout for each HTTP attempt.
-- `--max-retries 3` controls transient retries; zero disables them.
-- `--max-redirects 10` limits followed redirects.
+- `--name production-js` sets a target's unique name.
+- `--every 24h` sets its interval; durations include `30m`, `6h`, and `24h`.
+- `--header "Name: value"` stores a repeatable request header with the target.
+- `check NAME --force` checks immediately instead of waiting until the target is due.
+- `history NAME --limit 50` controls displayed history; zero shows everything.
+- `--timeout 30s`, `--max-retries 3`, and `--max-redirects 10` control HTTP behavior.
 - `--user-agent "MyMonitor/1.0"` changes the User-Agent for the current process.
-- `--data-dir PATH` uses a different state directory.
-
-Global HTTP and storage flags can be placed before a command:
-
-```sh
-fetchdiff --timeout 60s --max-retries 5 check production-js --force
-```
-
-FetchDiff stores private state under `~/.fetchdiff`: metadata in `state.db` and gzip-compressed snapshots under `snapshots/sha256`. Set `FETCHDIFF_DATA_DIR` or use `--data-dir` to override the location.
-
-Notification delivery is intentionally not included yet. Change and failure events are printed clearly to stdout for future integration.
+- `--data-dir PATH` or `FETCHDIFF_DATA_DIR` changes the state directory.
