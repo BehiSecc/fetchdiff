@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -88,6 +89,61 @@ func TestFetchRetries429(t *testing.T) {
 	}
 	if response.Attempts != 3 || string(response.Content) != "ok" {
 		t.Fatalf("response = %#v", response)
+	}
+}
+
+func TestFetchRecordsEffectiveURL(t *testing.T) {
+	destination := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer destination.Close()
+	source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, destination.URL+"/final.js", http.StatusFound)
+	}))
+	defer source.Close()
+	response, err := New(Options{Sleep: noSleep}).Fetch(context.Background(), Request{URL: source.URL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.EffectiveURL != destination.URL+"/final.js" {
+		t.Fatalf("effective URL = %q", response.EffectiveURL)
+	}
+}
+
+func TestFetchStopsAtRedirectLimitWithoutRetrying(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(nil)
+	server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Redirect(w, r, server.URL, http.StatusFound)
+	})
+	defer server.Close()
+	_, err := New(Options{MaxRedirects: 2, MaxRetries: 3, Sleep: noSleep}).Fetch(context.Background(), Request{URL: server.URL})
+	if err == nil {
+		t.Fatal("expected redirect error")
+	}
+	var fetchErr *Error
+	if !errors.As(err, &fetchErr) || fetchErr.Fingerprint != "redirect" {
+		t.Fatalf("error = %v", err)
+	}
+	if got := requests.Load(); got != 3 {
+		t.Fatalf("requests = %d, want 3", got)
+	}
+}
+
+func TestFetchRetryExhaustion(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	_, err := New(Options{MaxRetries: 2, Sleep: noSleep}).Fetch(context.Background(), Request{URL: server.URL})
+	if err == nil {
+		t.Fatal("expected retry exhaustion")
+	}
+	if got := requests.Load(); got != 3 {
+		t.Fatalf("requests = %d, want 3", got)
 	}
 }
 

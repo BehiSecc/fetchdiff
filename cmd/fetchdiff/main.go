@@ -27,11 +27,13 @@ import (
 const version = "0.1.0-dev"
 
 type cli struct {
-	out     io.Writer
-	errOut  io.Writer
-	dataDir string
-	timeout time.Duration
-	retries int
+	out       io.Writer
+	errOut    io.Writer
+	dataDir   string
+	timeout   time.Duration
+	retries   int
+	redirects int
+	userAgent string
 }
 
 type runtime struct {
@@ -51,7 +53,7 @@ func main() {
 }
 
 func newRootCommand(out, errOut io.Writer) *cobra.Command {
-	c := &cli{out: out, errOut: errOut, timeout: fetch.DefaultTimeout, retries: fetch.DefaultMaxRetries}
+	c := &cli{out: out, errOut: errOut, timeout: fetch.DefaultTimeout, retries: fetch.DefaultMaxRetries, redirects: fetch.DefaultMaxRedirects, userAgent: fetch.DefaultUserAgent}
 	root := &cobra.Command{
 		Use:           "fetchdiff",
 		Short:         "Monitor remote JavaScript and web pages for changes",
@@ -64,6 +66,8 @@ func newRootCommand(out, errOut io.Writer) *cobra.Command {
 	root.PersistentFlags().StringVar(&c.dataDir, "data-dir", "", "state directory (default ~/.fetchdiff)")
 	root.PersistentFlags().DurationVar(&c.timeout, "timeout", fetch.DefaultTimeout, "HTTP request timeout")
 	root.PersistentFlags().IntVar(&c.retries, "max-retries", fetch.DefaultMaxRetries, "maximum retries after a transient failure")
+	root.PersistentFlags().IntVar(&c.redirects, "max-redirects", fetch.DefaultMaxRedirects, "maximum redirects per request")
+	root.PersistentFlags().StringVar(&c.userAgent, "user-agent", fetch.DefaultUserAgent, "HTTP User-Agent header")
 	root.AddCommand(
 		c.addCommand(),
 		c.checkCommand(),
@@ -79,6 +83,18 @@ func newRootCommand(out, errOut io.Writer) *cobra.Command {
 }
 
 func (c *cli) open() (*runtime, error) {
+	if c.retries < 0 {
+		return nil, errors.New("--max-retries cannot be negative")
+	}
+	if c.redirects < 1 {
+		return nil, errors.New("--max-redirects must be at least one")
+	}
+	if c.timeout <= 0 {
+		return nil, errors.New("--timeout must be greater than zero")
+	}
+	if strings.TrimSpace(c.userAgent) == "" {
+		return nil, errors.New("--user-agent cannot be empty")
+	}
 	paths, err := config.ResolvePaths(c.dataDir)
 	if err != nil {
 		return nil, err
@@ -87,7 +103,7 @@ func (c *cli) open() (*runtime, error) {
 	if err := state.Initialize(); err != nil {
 		return nil, err
 	}
-	fetcher := fetch.New(fetch.Options{Timeout: c.timeout, MaxRetries: c.retries})
+	fetcher := fetch.New(fetch.Options{Timeout: c.timeout, MaxRetries: c.retries, DisableRetries: c.retries == 0, MaxRedirects: c.redirects, UserAgent: c.userAgent})
 	return &runtime{service: app.New(state, fetcher), store: state, paths: paths}, nil
 }
 
@@ -173,10 +189,17 @@ func (c *cli) watchCommand() *cobra.Command {
 			fmt.Fprintf(c.out, "Watching targets. State: %s\n", runtime.paths.Root)
 			for {
 				results, checkErr := runtime.service.CheckDue(cmd.Context())
+				hasOperationalError := false
 				for _, result := range results {
-					renderResult(c.out, runtime.service, result)
+					if result.Target.ID == "" {
+						hasOperationalError = true
+						continue
+					}
+					if shouldRenderWatch(result) {
+						renderResult(c.out, runtime.service, result)
+					}
 				}
-				if checkErr != nil && !errors.Is(checkErr, context.Canceled) {
+				if checkErr != nil && hasOperationalError && !errors.Is(checkErr, context.Canceled) {
 					fmt.Fprintln(c.errOut, "Check error:", checkErr)
 				}
 				if err := cmd.Context().Err(); err != nil {
@@ -254,10 +277,10 @@ func (c *cli) historyCommand() *cobra.Command {
 			for _, entry := range entries {
 				detail := entry.Error
 				if entry.StatusChanged {
-					detail = appendDetail(detail, "status changed")
+					detail = appendDetail(detail, fmt.Sprintf("status %d → %d", entry.PreviousStatusCode, entry.StatusCode))
 				}
 				if entry.RedirectChanged {
-					detail = appendDetail(detail, "redirect changed")
+					detail = appendDetail(detail, fmt.Sprintf("redirect %s → %s", entry.PreviousURL, entry.EffectiveURL))
 				}
 				fmt.Fprintf(writer, "%s\t%s\t%d\t%s\t%s\t%s\n", formatTime(entry.CheckedAt), entry.Outcome, entry.StatusCode, formatBytes(entry.Size), shortHash(entry.Hash), detail)
 			}
@@ -381,6 +404,13 @@ func renderResult(out io.Writer, service *app.Service, result app.CheckResult) {
 	fmt.Fprintf(out, "✓ %s unchanged.\n", result.Target.Name)
 }
 
+func shouldRenderWatch(result app.CheckResult) bool {
+	if result.History.Outcome == model.OutcomeFailure {
+		return result.FailureReached
+	}
+	return result.Changed || result.Recovered || result.History.StatusChanged || result.History.RedirectChanged
+}
+
 func printChange(out io.Writer, revision app.RevisionDiff) {
 	delta := revision.Current.Size - revision.Previous.Size
 	fmt.Fprintf(out, "🔄 %s changed · %s\n\n%s\n\n", revision.Target.ResourceType, revision.Target.Name, revision.Target.URL)
@@ -388,6 +418,15 @@ func printChange(out io.Writer, revision app.RevisionDiff) {
 	fmt.Fprintf(out, "Lines: +%d / -%d\n", revision.Diff.Added, revision.Diff.Removed)
 	fmt.Fprintf(out, "Hash: %s → %s\n", shortHash(revision.Previous.Hash), shortHash(revision.Current.Hash))
 	fmt.Fprintf(out, "Status: %d %s\n", revision.Current.StatusCode, httpStatusText(revision.Current.StatusCode))
+	if revision.Current.StatusChanged {
+		fmt.Fprintf(out, "Status change: %d → %d\n", revision.Current.PreviousStatusCode, revision.Current.StatusCode)
+	}
+	if revision.Current.RedirectChanged {
+		fmt.Fprintf(out, "Redirect: %s → %s\n", revision.Current.PreviousURL, revision.Current.EffectiveURL)
+	}
+	if revision.Current.Recovered {
+		fmt.Fprintln(out, "Recovery: target is healthy again")
+	}
 	fmt.Fprintf(out, "Checked: %s\n", formatTime(revision.Current.CheckedAt))
 	if revision.Diff.FormatNote != "" {
 		fmt.Fprintf(out, "Note: %s\n", revision.Diff.FormatNote)
@@ -438,14 +477,25 @@ func doctor(runtime *runtime) error {
 	if err != nil {
 		return err
 	}
+	checked := make(map[string]bool)
 	for _, target := range targets {
-		content, err := runtime.store.Snapshot(target.SnapshotHash)
+		entries, err := runtime.service.History(target.Name)
 		if err != nil {
-			return fmt.Errorf("%s snapshot: %w", target.Name, err)
+			return err
 		}
-		actual := fmt.Sprintf("%x", sha256.Sum256(content))
-		if actual != target.SnapshotHash {
-			return fmt.Errorf("%s snapshot hash mismatch", target.Name)
+		for _, entry := range entries {
+			if entry.Hash == "" || checked[entry.Hash] {
+				continue
+			}
+			content, err := runtime.store.Snapshot(entry.Hash)
+			if err != nil {
+				return fmt.Errorf("%s snapshot %s: %w", target.Name, shortHash(entry.Hash), err)
+			}
+			actual := fmt.Sprintf("%x", sha256.Sum256(content))
+			if actual != entry.Hash {
+				return fmt.Errorf("%s snapshot %s hash mismatch", target.Name, shortHash(entry.Hash))
+			}
+			checked[entry.Hash] = true
 		}
 	}
 	return nil

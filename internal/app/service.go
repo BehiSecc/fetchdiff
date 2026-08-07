@@ -110,6 +110,7 @@ func (s *Service) Add(ctx context.Context, input AddInput) (model.Target, error)
 	}
 	target := model.Target{
 		ID:            newID(),
+		Revision:      1,
 		Name:          input.Name,
 		URL:           input.URL,
 		Every:         input.Every,
@@ -152,7 +153,7 @@ func (s *Service) CheckTarget(ctx context.Context, name string, force bool) (Che
 	if !force && !schedule.Due(target, now) {
 		return CheckResult{Target: target, Skipped: true}, nil
 	}
-	return s.check(ctx, target)
+	return s.checkWithConflictRetry(ctx, target)
 }
 
 func (s *Service) CheckDue(ctx context.Context) ([]CheckResult, error) {
@@ -167,7 +168,7 @@ func (s *Service) CheckDue(ctx context.Context) ([]CheckResult, error) {
 		if !schedule.Due(target, now) {
 			continue
 		}
-		result, err := s.check(ctx, target)
+		result, err := s.checkWithConflictRetry(ctx, target)
 		results = append(results, result)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("%s: %w", target.Name, err))
@@ -177,6 +178,21 @@ func (s *Service) CheckDue(ctx context.Context) ([]CheckResult, error) {
 		}
 	}
 	return results, errors.Join(failures...)
+}
+
+func (s *Service) checkWithConflictRetry(ctx context.Context, target model.Target) (CheckResult, error) {
+	for attempt := 0; attempt < 2; attempt++ {
+		result, err := s.check(ctx, target)
+		if !errors.Is(err, store.ErrTargetChanged) {
+			return result, err
+		}
+		fresh, loadErr := s.store.Target(target.ID)
+		if loadErr != nil {
+			return CheckResult{}, errors.Join(err, loadErr)
+		}
+		target = fresh
+	}
+	return CheckResult{}, store.ErrTargetChanged
 }
 
 func (s *Service) check(ctx context.Context, target model.Target) (CheckResult, error) {
@@ -190,6 +206,8 @@ func (s *Service) check(ctx context.Context, target model.Target) (CheckResult, 
 	now := s.now()
 	target.LastCheckedAt = now
 	target.NextCheckAt = now.Add(target.Every)
+	expectedRevision := target.Revision
+	target.Revision++
 	if fetchErr != nil {
 		target.ConsecutiveFailures++
 		target.LastError = fetchErr.Error()
@@ -199,16 +217,20 @@ func (s *Service) check(ctx context.Context, target model.Target) (CheckResult, 
 			target.FailureReported = true
 		}
 		entry := model.HistoryEntry{
-			TargetID:     target.ID,
-			CheckedAt:    now,
-			Outcome:      model.OutcomeFailure,
-			Hash:         target.SnapshotHash,
-			Size:         target.SnapshotSize,
-			StatusCode:   response.StatusCode,
-			EffectiveURL: response.EffectiveURL,
-			Error:        fetchErr.Error(),
+			TargetID:           target.ID,
+			CheckedAt:          now,
+			Outcome:            model.OutcomeFailure,
+			Hash:               target.SnapshotHash,
+			Size:               target.SnapshotSize,
+			StatusCode:         response.StatusCode,
+			PreviousStatusCode: target.StatusCode,
+			EffectiveURL:       response.EffectiveURL,
+			PreviousURL:        target.EffectiveURL,
+			StatusChanged:      response.StatusCode != 0 && response.StatusCode != target.StatusCode,
+			RedirectChanged:    response.EffectiveURL != "" && response.EffectiveURL != target.EffectiveURL,
+			Error:              fetchErr.Error(),
 		}
-		if err := s.store.UpdateTarget(target, entry); err != nil {
+		if err := s.store.UpdateTarget(target, expectedRevision, entry); err != nil {
 			return CheckResult{}, errors.Join(fetchErr, err)
 		}
 		return CheckResult{Target: target, History: entry, FailureReached: reached}, fetchErr
@@ -282,7 +304,7 @@ func (s *Service) check(ctx context.Context, target model.Target) (CheckResult, 
 		RedirectChanged:    redirectChanged,
 		Recovered:          wasReported,
 	}
-	if err := s.store.UpdateTarget(target, entry); err != nil {
+	if err := s.store.UpdateTarget(target, expectedRevision, entry); err != nil {
 		return CheckResult{}, err
 	}
 	return CheckResult{
@@ -306,7 +328,7 @@ func (s *Service) RevisionDiff(name string) (RevisionDiff, error) {
 	}
 	var current, previous model.HistoryEntry
 	for _, entry := range history {
-		if entry.Hash == "" {
+		if entry.Hash == "" || (entry.Outcome != model.OutcomeBaseline && entry.Outcome != model.OutcomeChanged) {
 			continue
 		}
 		if current.Hash == "" {

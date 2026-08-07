@@ -1,7 +1,7 @@
 package compare
 
 import (
-	"bufio"
+	"bytes"
 	"fmt"
 	"strings"
 
@@ -23,6 +23,11 @@ func Build(oldContent, newContent []byte, resourceType, oldLabel, newLabel strin
 	if note == "" {
 		note = newNote
 	}
+	if !bytes.Equal(oldContent, newContent) && oldText == newText {
+		oldText = trailingNewline(string(oldContent))
+		newText = trailingNewline(string(newContent))
+		note = "Beautification normalized the only change; showing the raw diff"
+	}
 	text, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
 		A:        difflib.SplitLines(oldText),
 		B:        difflib.SplitLines(newText),
@@ -34,9 +39,7 @@ func Build(oldContent, newContent []byte, resourceType, oldLabel, newLabel strin
 		return Diff{}, fmt.Errorf("build unified diff: %w", err)
 	}
 	result := Diff{Text: text, FormatNote: note}
-	scanner := bufio.NewScanner(strings.NewReader(text))
-	for scanner.Scan() {
-		line := scanner.Text()
+	for _, line := range strings.Split(text, "\n") {
 		switch {
 		case strings.HasPrefix(line, "+") && !strings.HasPrefix(line, "+++"):
 			result.Added++
@@ -44,8 +47,12 @@ func Build(oldContent, newContent []byte, resourceType, oldLabel, newLabel strin
 			result.Removed++
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return Diff{}, fmt.Errorf("count diff lines: %w", err)
-	}
 	return result, nil
+}
+
+func trailingNewline(value string) string {
+	if value == "" || strings.HasSuffix(value, "\n") {
+		return value
+	}
+	return value + "\n"
 }

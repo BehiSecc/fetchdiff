@@ -23,6 +23,8 @@ const (
 	DefaultUserAgent    = "fetchdiff/0.1"
 )
 
+var errRedirectLimit = errors.New("redirect limit reached")
+
 type Request struct {
 	URL          string
 	Headers      map[string]string
@@ -69,13 +71,14 @@ type Client struct {
 }
 
 type Options struct {
-	Timeout      time.Duration
-	MaxRedirects int
-	MaxRetries   int
-	MaxBodyBytes int64
-	UserAgent    string
-	HTTPClient   *http.Client
-	Sleep        func(context.Context, time.Duration) error
+	Timeout        time.Duration
+	MaxRedirects   int
+	MaxRetries     int
+	DisableRetries bool
+	MaxBodyBytes   int64
+	UserAgent      string
+	HTTPClient     *http.Client
+	Sleep          func(context.Context, time.Duration) error
 }
 
 func New(options Options) *Client {
@@ -85,7 +88,7 @@ func New(options Options) *Client {
 	if options.MaxRedirects <= 0 {
 		options.MaxRedirects = DefaultMaxRedirects
 	}
-	if options.MaxRetries < 0 {
+	if options.DisableRetries || options.MaxRetries < 0 {
 		options.MaxRetries = 0
 	} else if options.MaxRetries == 0 {
 		options.MaxRetries = DefaultMaxRetries
@@ -102,7 +105,7 @@ func New(options Options) *Client {
 			Timeout: options.Timeout,
 			CheckRedirect: func(_ *http.Request, via []*http.Request) error {
 				if len(via) > options.MaxRedirects {
-					return fmt.Errorf("stopped after %d redirects", options.MaxRedirects)
+					return fmt.Errorf("%w after %d redirects", errRedirectLimit, options.MaxRedirects)
 				}
 				return nil
 			},
@@ -156,7 +159,9 @@ func (c *Client) fetchOnce(ctx context.Context, request Request) (Response, erro
 	if err != nil {
 		fingerprint := "network"
 		var netErr net.Error
-		if errors.As(err, &netErr) && netErr.Timeout() {
+		if errors.Is(err, errRedirectLimit) {
+			fingerprint = "redirect"
+		} else if errors.As(err, &netErr) && netErr.Timeout() {
 			fingerprint = "timeout"
 		}
 		return Response{}, &Error{Fingerprint: fingerprint, Err: err}

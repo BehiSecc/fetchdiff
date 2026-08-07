@@ -2,6 +2,7 @@ package store
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -76,5 +77,22 @@ func TestTargetAndHistory(t *testing.T) {
 	}
 	if len(history) != 1 || history[0].Outcome != model.OutcomeBaseline {
 		t.Fatalf("history = %#v", history)
+	}
+}
+
+func TestUpdateTargetRejectsStaleRevision(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC()
+	target := model.Target{ID: "target-1", Revision: 1, Name: "app", URL: "https://example.com/app.js"}
+	entry := model.HistoryEntry{TargetID: target.ID, CheckedAt: now, Outcome: model.OutcomeBaseline}
+	if err := store.CreateTarget(target, entry); err != nil {
+		t.Fatal(err)
+	}
+	target.Revision = 2
+	if err := store.UpdateTarget(target, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.UpdateTarget(target, 1); !errors.Is(err, ErrTargetChanged) {
+		t.Fatalf("stale update error = %v", err)
 	}
 }

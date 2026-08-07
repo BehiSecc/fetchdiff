@@ -16,6 +16,7 @@ const (
 
 type Target struct {
 	ID                   string            `json:"id"`
+	Revision             uint64            `json:"revision"`
 	Name                 string            `json:"name"`
 	URL                  string            `json:"url"`
 	Every                time.Duration     `json:"every"`

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -171,5 +173,92 @@ func TestAddAcceptsEmptySuccessfulContent(t *testing.T) {
 	}
 	if target.SnapshotSize != 0 || target.SnapshotHash != contentHash(nil) {
 		t.Fatalf("target = %#v", target)
+	}
+}
+
+func TestRevisionDiffIgnoresFailureRows(t *testing.T) {
+	failure := &fetch.Error{StatusCode: 500, Status: "500 Internal Server Error", Fingerprint: "http:500", Err: errors.New("server error")}
+	fake := &fakeFetcher{steps: []fetchStep{
+		{response: baselineResponse("const value=1")},
+		{response: baselineResponse("const value=2")},
+		{response: fetch.Response{StatusCode: 500}, err: failure},
+	}}
+	service, _ := newTestService(t, fake)
+	now := time.Now().UTC()
+	service.now = func() time.Time { return now }
+	if _, err := service.Add(context.Background(), AddInput{Name: "app", URL: "https://cdn.example.com/app.js", Every: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	if _, err := service.CheckTarget(context.Background(), "app", true); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	if _, err := service.CheckTarget(context.Background(), "app", true); err == nil {
+		t.Fatal("expected fetch failure")
+	}
+	revision, err := service.RevisionDiff("app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revision.Current.Outcome != model.OutcomeChanged || revision.Current.StatusCode != http.StatusOK {
+		t.Fatalf("current revision = %#v", revision.Current)
+	}
+}
+
+type overlappingFetcher struct {
+	calls    atomic.Int32
+	entered  atomic.Int32
+	ready    chan struct{}
+	closeOne sync.Once
+}
+
+func (f *overlappingFetcher) Fetch(_ context.Context, _ fetch.Request) (fetch.Response, error) {
+	call := f.calls.Add(1)
+	if call == 1 {
+		return baselineResponse("const value=1"), nil
+	}
+	if call == 2 || call == 3 {
+		if f.entered.Add(1) == 2 {
+			f.closeOne.Do(func() { close(f.ready) })
+		}
+		<-f.ready
+		if call == 2 {
+			return baselineResponse("const value=2"), nil
+		}
+	}
+	return baselineResponse("const value=3"), nil
+}
+
+func TestOverlappingChecksCannotRollBackState(t *testing.T) {
+	fake := &overlappingFetcher{ready: make(chan struct{})}
+	service, state := newTestService(t, fake)
+	service.now = func() time.Time { return time.Now().UTC() }
+	if _, err := service.Add(context.Background(), AddInput{Name: "app", URL: "https://cdn.example.com/app.js", Every: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	var wait sync.WaitGroup
+	errorsSeen := make(chan error, 2)
+	for range 2 {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			_, err := service.CheckTarget(context.Background(), "app", true)
+			errorsSeen <- err
+		}()
+	}
+	wait.Wait()
+	close(errorsSeen)
+	for err := range errorsSeen {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	target, err := state.Target("app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.SnapshotHash != contentHash([]byte("const value=3")) {
+		t.Fatalf("final hash = %s", target.SnapshotHash)
 	}
 }

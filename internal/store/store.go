@@ -26,6 +26,8 @@ var (
 	historyBucket = []byte("history")
 )
 
+var ErrTargetChanged = errors.New("target changed during check")
+
 type Store struct {
 	paths config.Paths
 }
@@ -94,13 +96,24 @@ func (s *Store) CreateTarget(target model.Target, entry model.HistoryEntry) erro
 	})
 }
 
-func (s *Store) UpdateTarget(target model.Target, entries ...model.HistoryEntry) error {
+func (s *Store) UpdateTarget(target model.Target, expectedRevision uint64, entries ...model.HistoryEntry) error {
 	db, err := s.open()
 	if err != nil {
 		return err
 	}
 	defer db.Close()
 	return db.Update(func(tx *bolt.Tx) error {
+		currentData := tx.Bucket(targetsBucket).Get([]byte(target.ID))
+		if currentData == nil {
+			return fmt.Errorf("target %q not found", target.Name)
+		}
+		var current model.Target
+		if err := json.Unmarshal(currentData, &current); err != nil {
+			return fmt.Errorf("decode current target: %w", err)
+		}
+		if current.Revision != expectedRevision {
+			return ErrTargetChanged
+		}
 		if err := putJSON(tx.Bucket(targetsBucket), []byte(target.ID), target); err != nil {
 			return err
 		}
