@@ -124,6 +124,33 @@ func TestNotModifiedKeepsSnapshot(t *testing.T) {
 	}
 }
 
+func TestCheckAllForcesEveryTarget(t *testing.T) {
+	fake := &fakeFetcher{steps: []fetchStep{
+		{response: baselineResponse("one")},
+		{response: baselineResponse("two")},
+		{response: baselineResponse("one")},
+		{response: baselineResponse("two")},
+	}}
+	service, _ := newTestService(t, fake)
+	now := time.Now().UTC()
+	service.now = func() time.Time { return now }
+	for _, name := range []string{"one", "two"} {
+		if _, err := service.Add(context.Background(), AddInput{Name: name, URL: "https://cdn.example.com/" + name + ".js", Every: 24 * time.Hour}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if results, err := service.CheckDue(context.Background()); err != nil || len(results) != 0 {
+		t.Fatalf("due results = %#v, %v", results, err)
+	}
+	results, err := service.CheckAll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 || len(fake.requests) != 4 {
+		t.Fatalf("results = %#v, requests = %d", results, len(fake.requests))
+	}
+}
+
 func TestFailuresDoNotReplaceSnapshotAndRecoveryIsRecorded(t *testing.T) {
 	failure := &fetch.Error{StatusCode: http.StatusInternalServerError, Status: "500 Internal Server Error", Fingerprint: "http:500", Err: errors.New("server error")}
 	fake := &fakeFetcher{steps: []fetchStep{

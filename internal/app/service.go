@@ -85,6 +85,10 @@ func (s *Service) History(name string) ([]model.HistoryEntry, error) {
 	return s.store.History(target.ID)
 }
 
+func (s *Service) Remove(name string) (model.Target, error) {
+	return s.store.DeleteTarget(strings.TrimSpace(name))
+}
+
 func (s *Service) Add(ctx context.Context, input AddInput) (model.Target, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	if !targetNamePattern.MatchString(input.Name) {
@@ -163,6 +167,14 @@ func (s *Service) CheckTarget(ctx context.Context, name string, force bool) (Che
 }
 
 func (s *Service) CheckDue(ctx context.Context) ([]CheckResult, error) {
+	return s.checkTargets(ctx, true)
+}
+
+func (s *Service) CheckAll(ctx context.Context) ([]CheckResult, error) {
+	return s.checkTargets(ctx, false)
+}
+
+func (s *Service) checkTargets(ctx context.Context, dueOnly bool) ([]CheckResult, error) {
 	targets, err := s.store.Targets()
 	if err != nil {
 		return nil, err
@@ -171,16 +183,17 @@ func (s *Service) CheckDue(ctx context.Context) ([]CheckResult, error) {
 	var failures []error
 	now := s.now()
 	for _, target := range targets {
-		if !schedule.Due(target, now) {
+		if err := ctx.Err(); err != nil {
+			failures = append(failures, err)
+			break
+		}
+		if dueOnly && !schedule.Due(target, now) {
 			continue
 		}
 		result, err := s.checkWithConflictRetry(ctx, target)
 		results = append(results, result)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("%s: %w", target.Name, err))
-		}
-		if ctx.Err() != nil {
-			break
 		}
 	}
 	return results, errors.Join(failures...)

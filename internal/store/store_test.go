@@ -80,6 +80,50 @@ func TestTargetAndHistory(t *testing.T) {
 	}
 }
 
+func TestDeleteTargetRemovesHistoryAndQueuedNotifications(t *testing.T) {
+	state := newTestStore(t)
+	now := time.Now().UTC()
+	target := model.Target{ID: "target-1", Revision: 1, Name: "Production-JS", URL: "https://example.com/app.js"}
+	if err := state.CreateTarget(target, model.HistoryEntry{TargetID: target.ID, CheckedAt: now, Outcome: model.OutcomeBaseline}); err != nil {
+		t.Fatal(err)
+	}
+	other := model.Target{ID: "target-2", Revision: 1, Name: "other", URL: "https://example.com/other.js"}
+	if err := state.CreateTarget(other, model.HistoryEntry{TargetID: other.ID, CheckedAt: now, Outcome: model.OutcomeBaseline}); err != nil {
+		t.Fatal(err)
+	}
+	target.Revision++
+	notification := model.Notification{
+		ID: "event-1", TargetID: target.ID, TargetName: target.Name, CreatedAt: now,
+		Deliveries: map[string]model.DeliveryState{"custom:webhook": {}},
+	}
+	if err := state.CommitTarget(target, 1, []model.HistoryEntry{{TargetID: target.ID, CheckedAt: now.Add(time.Minute), Outcome: model.OutcomeChanged}}, []model.Notification{notification}); err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := state.DeleteTarget("production-js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed.ID != target.ID {
+		t.Fatalf("removed = %#v", removed)
+	}
+	if _, err := state.Target(target.Name); err == nil {
+		t.Fatal("deleted target is still available")
+	}
+	if history, err := state.History(target.ID); err != nil || len(history) != 0 {
+		t.Fatalf("history = %#v, %v", history, err)
+	}
+	if notifications, err := state.Notifications(); err != nil || len(notifications) != 0 {
+		t.Fatalf("notifications = %#v, %v", notifications, err)
+	}
+	if _, err := state.Target(other.Name); err != nil {
+		t.Fatalf("unrelated target was removed: %v", err)
+	}
+	if _, err := state.DeleteTarget(target.Name); err == nil {
+		t.Fatal("expected removing a missing target to fail")
+	}
+}
+
 func TestUpdateTargetRejectsStaleRevision(t *testing.T) {
 	store := newTestStore(t)
 	now := time.Now().UTC()

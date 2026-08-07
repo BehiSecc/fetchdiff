@@ -77,6 +77,7 @@ func newRootCommand(out, errOut io.Writer) *cobra.Command {
 	root.AddCommand(
 		c.initCommand(),
 		c.addCommand(),
+		c.removeCommand(),
 		c.checkCommand(),
 		c.watchCommand(),
 		c.listCommand(),
@@ -237,6 +238,26 @@ func (c *cli) addCommand() *cobra.Command {
 	return command
 }
 
+func (c *cli) removeCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "remove NAME",
+		Short: "Remove a target and its saved history",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			runtime, err := c.open()
+			if err != nil {
+				return err
+			}
+			target, err := runtime.service.Remove(args[0])
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(c.out, "✓ Removed target %s and its history.\n", target.Name)
+			return nil
+		},
+	}
+}
+
 func (c *cli) checkCommand() *cobra.Command {
 	var force bool
 	command := &cobra.Command{
@@ -251,9 +272,6 @@ func (c *cli) checkCommand() *cobra.Command {
 			if err := runtime.validateNotifications(); err != nil {
 				return err
 			}
-			if force && len(args) == 0 {
-				return errors.New("--force requires a target name")
-			}
 			before := runtime.drain(cmd.Context())
 			if len(args) == 1 {
 				result, checkErr := runtime.service.CheckTarget(cmd.Context(), args[0], force)
@@ -267,9 +285,19 @@ func (c *cli) checkCommand() *cobra.Command {
 				renderDispatch(c.out, before, after)
 				return errors.Join(checkErr, before.Err(), after.Err())
 			}
-			results, checkErr := runtime.service.CheckDue(cmd.Context())
+			var results []app.CheckResult
+			var checkErr error
+			if force {
+				results, checkErr = runtime.service.CheckAll(cmd.Context())
+			} else {
+				results, checkErr = runtime.service.CheckDue(cmd.Context())
+			}
 			if len(results) == 0 {
-				fmt.Fprintln(c.out, "No targets are due.")
+				if force {
+					fmt.Fprintln(c.out, "No targets configured.")
+				} else {
+					fmt.Fprintln(c.out, "No targets are due.")
+				}
 				renderDispatch(c.out, before)
 				return errors.Join(checkErr, before.Err())
 			}
@@ -281,7 +309,7 @@ func (c *cli) checkCommand() *cobra.Command {
 			return errors.Join(checkErr, before.Err(), after.Err())
 		},
 	}
-	command.Flags().BoolVar(&force, "force", false, "check now even when the target is not due")
+	command.Flags().BoolVar(&force, "force", false, "check now even when targets are not due")
 	return command
 }
 

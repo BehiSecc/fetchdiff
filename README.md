@@ -67,7 +67,9 @@ sudo systemctl restart fetchdiff
 ```sh
 fetchdiff list
 fetchdiff check
+fetchdiff check --force
 fetchdiff check production-js --force
+fetchdiff remove production-js
 fetchdiff history production-js
 fetchdiff diff production-js
 fetchdiff status
@@ -81,7 +83,7 @@ fetchdiff doctor
 - `--name production-js` sets a target's unique name.
 - `--every 24h` sets its interval; durations include `30m`, `6h`, and `24h`.
 - `--header "Name: value"` stores a repeatable request header with the target.
-- `check NAME --force` checks immediately instead of waiting until the target is due.
+- `check --force` checks every target now; `check NAME --force` checks one target now.
 - `history NAME --limit 50` controls displayed history; zero shows everything.
 - `--timeout 30s`, `--max-retries 3`, and `--max-redirects 10` control HTTP behavior.
 - `--user-agent "MyMonitor/1.0"` changes the User-Agent for the current process.

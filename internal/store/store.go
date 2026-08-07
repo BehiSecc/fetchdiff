@@ -97,6 +97,65 @@ func (s *Store) CreateTarget(target model.Target, entry model.HistoryEntry) erro
 	})
 }
 
+// DeleteTarget atomically removes a target, its history, and its queued
+// notifications. Snapshot blobs are content-addressed and intentionally kept
+// because another process may be in the middle of referencing the same blob.
+func (s *Store) DeleteTarget(name string) (model.Target, error) {
+	db, err := s.open()
+	if err != nil {
+		return model.Target{}, err
+	}
+	defer db.Close()
+	var removed model.Target
+	err = db.Update(func(tx *bolt.Tx) error {
+		names := tx.Bucket(namesBucket)
+		nameKey := []byte(strings.ToLower(name))
+		id := names.Get(nameKey)
+		if id == nil {
+			return fmt.Errorf("target %q not found", name)
+		}
+		id = append([]byte(nil), id...)
+		data := tx.Bucket(targetsBucket).Get(id)
+		if data == nil {
+			return fmt.Errorf("target %q index is invalid", name)
+		}
+		if err := json.Unmarshal(data, &removed); err != nil {
+			return fmt.Errorf("decode target: %w", err)
+		}
+		if err := tx.Bucket(targetsBucket).Delete(id); err != nil {
+			return fmt.Errorf("delete target: %w", err)
+		}
+		if err := names.Delete(nameKey); err != nil {
+			return fmt.Errorf("delete target name index: %w", err)
+		}
+
+		history := tx.Bucket(historyBucket)
+		prefix := []byte(removed.ID + "\x00")
+		cursor := history.Cursor()
+		for key, _ := cursor.Seek(prefix); key != nil && bytes.HasPrefix(key, prefix); key, _ = cursor.Next() {
+			if err := cursor.Delete(); err != nil {
+				return fmt.Errorf("delete target history: %w", err)
+			}
+		}
+
+		notifications := tx.Bucket(notificationsBucket)
+		notificationCursor := notifications.Cursor()
+		for key, value := notificationCursor.First(); key != nil; key, value = notificationCursor.Next() {
+			var notification model.Notification
+			if err := json.Unmarshal(value, &notification); err != nil {
+				return fmt.Errorf("decode notification: %w", err)
+			}
+			if notification.TargetID == removed.ID {
+				if err := notificationCursor.Delete(); err != nil {
+					return fmt.Errorf("delete target notification: %w", err)
+				}
+			}
+		}
+		return nil
+	})
+	return removed, err
+}
+
 func (s *Store) UpdateTarget(target model.Target, expectedRevision uint64, entries ...model.HistoryEntry) error {
 	return s.CommitTarget(target, expectedRevision, entries, nil)
 }

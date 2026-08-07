@@ -115,6 +115,49 @@ func TestCommandWorkflow(t *testing.T) {
 	}
 }
 
+func TestForceCheckAllAndRemoveTarget(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		_, _ = io.WriteString(w, `const path = "`+request.URL.Path+`";`)
+	}))
+	defer server.Close()
+
+	dataDir := filepath.Join(t.TempDir(), "state")
+	run := func(args ...string) (string, error) {
+		var output bytes.Buffer
+		command := newRootCommand(&output, &output)
+		command.SetArgs(append([]string{"--data-dir", dataDir}, args...))
+		err := command.Execute()
+		return output.String(), err
+	}
+	for _, name := range []string{"alpha", "beta"} {
+		if output, err := run("add", server.URL+"/"+name+".js", "--name", name, "--every", "24h"); err != nil {
+			t.Fatalf("add %s: %v\n%s", name, err, output)
+		}
+	}
+	output, err := run("check", "--force")
+	if err != nil {
+		t.Fatalf("force check all: %v\n%s", err, output)
+	}
+	if !strings.Contains(output, "alpha unchanged") || !strings.Contains(output, "beta unchanged") {
+		t.Fatalf("force check output:\n%s", output)
+	}
+	output, err = run("remove", "alpha")
+	if err != nil || !strings.Contains(output, "Removed target alpha") {
+		t.Fatalf("remove: %v\n%s", err, output)
+	}
+	output, err = run("list")
+	if err != nil {
+		t.Fatalf("list: %v\n%s", err, output)
+	}
+	if strings.Contains(output, "alpha") || !strings.Contains(output, "beta") {
+		t.Fatalf("list after remove:\n%s", output)
+	}
+	if output, err = run("history", "alpha"); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("removed history: %v\n%s", err, output)
+	}
+}
+
 func TestNotifyTestUsesConfiguredCustomWebhook(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
