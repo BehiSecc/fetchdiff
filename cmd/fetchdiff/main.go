@@ -233,6 +233,10 @@ func (c *cli) watchCommand() *cobra.Command {
 			for {
 				before := runtime.drain(cmd.Context())
 				renderDispatch(c.out, before)
+				if cmd.Context().Err() != nil {
+					fmt.Fprintln(c.out, "Watcher stopped.")
+					return nil
+				}
 				results, checkErr := runtime.service.CheckDue(cmd.Context())
 				hasOperationalError := false
 				for _, result := range results {

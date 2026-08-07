@@ -123,7 +123,7 @@ func TestNotificationClaimAndDelivery(t *testing.T) {
 	if second, err := store.ClaimNotifications(now, "worker-2", time.Minute, 10); err != nil || len(second) != 0 {
 		t.Fatalf("second claim = %#v, %v", second, err)
 	}
-	if err := store.SaveDelivery(notification.ID, "worker-1", "custom:webhook", nil); err != nil {
+	if err := store.SaveDelivery(notification.ID, "worker-1", "custom:webhook", nil, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	events, destinations, err := store.NotificationCounts()
@@ -132,5 +132,53 @@ func TestNotificationClaimAndDelivery(t *testing.T) {
 	}
 	if events != 0 || destinations != 0 {
 		t.Fatalf("counts = %d events, %d destinations", events, destinations)
+	}
+}
+
+func TestNotificationClaimsAreChronological(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC()
+	target := model.Target{ID: "target-1", Revision: 1, Name: "app", URL: "https://example.com/app.js"}
+	if err := store.CreateTarget(target, model.HistoryEntry{TargetID: target.ID, CheckedAt: now, Outcome: model.OutcomeBaseline}); err != nil {
+		t.Fatal(err)
+	}
+	target.Revision++
+	notifications := []model.Notification{
+		{ID: "later", CreatedAt: now, Deliveries: map[string]model.DeliveryState{"custom:later": {}}},
+		{ID: "earlier", CreatedAt: now.Add(-time.Minute), Deliveries: map[string]model.DeliveryState{"custom:earlier": {}}},
+	}
+	if err := store.CommitTarget(target, 1, nil, notifications); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimNotifications(now, "worker", time.Minute, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claimed) != 2 || claimed[0].ID != "earlier" || claimed[1].ID != "later" {
+		t.Fatalf("claimed = %#v", claimed)
+	}
+}
+
+func TestDelayedNotificationBlocksNewerDeliveryToSameDestination(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC()
+	target := model.Target{ID: "target-1", Revision: 1, Name: "app", URL: "https://example.com/app.js"}
+	if err := store.CreateTarget(target, model.HistoryEntry{TargetID: target.ID, CheckedAt: now, Outcome: model.OutcomeBaseline}); err != nil {
+		t.Fatal(err)
+	}
+	target.Revision++
+	notifications := []model.Notification{
+		{ID: "earlier", CreatedAt: now.Add(-time.Minute), Deliveries: map[string]model.DeliveryState{"custom:webhook": {NextAttemptAt: now.Add(time.Hour)}}},
+		{ID: "later", CreatedAt: now, Deliveries: map[string]model.DeliveryState{"custom:webhook": {}}},
+	}
+	if err := store.CommitTarget(target, 1, nil, notifications); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimNotifications(now, "worker", time.Minute, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claimed) != 0 {
+		t.Fatalf("newer event bypassed delayed event: %#v", claimed)
 	}
 }

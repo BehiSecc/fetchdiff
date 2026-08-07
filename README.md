@@ -37,6 +37,8 @@ chmod 600 ~/.fetchdiff/providers.yaml
 fetchdiff notify-test
 ```
 
+If you have several custom webhooks, keep them as entries under one `custom:` list; duplicate YAML keys are invalid.
+
 Test a specific destination when needed:
 
 ```sh

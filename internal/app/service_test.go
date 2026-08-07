@@ -333,3 +333,36 @@ func TestFailureThresholdAndRecoveryQueueOnce(t *testing.T) {
 		t.Fatalf("events after recovery = %d, want 2", events)
 	}
 }
+
+func TestCanceledCheckDoesNotMutateTarget(t *testing.T) {
+	fake := &fakeFetcher{steps: []fetchStep{
+		{response: baselineResponse("good")},
+		{err: context.Canceled},
+	}}
+	service, state := newTestService(t, fake, "custom:webhook")
+	now := time.Now().UTC()
+	service.now = func() time.Time { return now }
+	before, err := service.Add(context.Background(), AddInput{Name: "app", URL: "https://cdn.example.com/app.js", Every: 24 * time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := service.CheckTarget(ctx, "app", true); !errors.Is(err, context.Canceled) {
+		t.Fatalf("check error = %v", err)
+	}
+	after, err := state.Target("app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Revision != before.Revision || after.ConsecutiveFailures != 0 || !after.NextCheckAt.Equal(before.NextCheckAt) {
+		t.Fatalf("target mutated after cancellation:\nbefore=%#v\nafter=%#v", before, after)
+	}
+	events, _, err := state.NotificationCounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events != 0 {
+		t.Fatalf("queued %d false notifications", events)
+	}
+}

@@ -160,41 +160,53 @@ func (s *Store) ClaimNotifications(now time.Time, owner string, lease time.Durat
 	var claimed []model.Notification
 	err = db.Update(func(tx *bolt.Tx) error {
 		bucket := tx.Bucket(notificationsBucket)
-		var keys [][]byte
+		type candidate struct {
+			key          []byte
+			notification model.Notification
+		}
+		var candidates []candidate
 		if err := bucket.ForEach(func(key, value []byte) error {
-			if len(keys) >= limit {
-				return nil
-			}
 			var notification model.Notification
 			if err := json.Unmarshal(value, &notification); err != nil {
 				return fmt.Errorf("decode notification: %w", err)
 			}
+			candidates = append(candidates, candidate{key: append([]byte(nil), key...), notification: notification})
+			return nil
+		}); err != nil {
+			return err
+		}
+		sort.Slice(candidates, func(i, j int) bool {
+			return candidates[i].notification.CreatedAt.Before(candidates[j].notification.CreatedAt)
+		})
+		earliest := make(map[string]string)
+		for _, candidate := range candidates {
+			for destination := range candidate.notification.Deliveries {
+				if earliest[destination] == "" {
+					earliest[destination] = candidate.notification.ID
+				}
+			}
+		}
+		for _, candidate := range candidates {
+			if len(claimed) >= limit {
+				break
+			}
+			notification := candidate.notification
 			if notification.LeaseOwner != "" && notification.LeaseUntil.After(now) {
-				return nil
+				continue
 			}
 			due := false
-			for _, delivery := range notification.Deliveries {
-				if !delivery.NextAttemptAt.After(now) {
+			for destination, delivery := range notification.Deliveries {
+				if earliest[destination] == notification.ID && !delivery.NextAttemptAt.After(now) {
 					due = true
 					break
 				}
 			}
 			if !due {
-				return nil
-			}
-			keys = append(keys, append([]byte(nil), key...))
-			return nil
-		}); err != nil {
-			return err
-		}
-		for _, key := range keys {
-			var notification model.Notification
-			if err := json.Unmarshal(bucket.Get(key), &notification); err != nil {
-				return fmt.Errorf("decode notification: %w", err)
+				continue
 			}
 			notification.LeaseOwner = owner
 			notification.LeaseUntil = now.Add(lease)
-			if err := putJSON(bucket, key, notification); err != nil {
+			if err := putJSON(bucket, candidate.key, notification); err != nil {
 				return err
 			}
 			claimed = append(claimed, notification)
@@ -204,7 +216,7 @@ func (s *Store) ClaimNotifications(now time.Time, owner string, lease time.Durat
 	return claimed, err
 }
 
-func (s *Store) SaveDelivery(notificationID, owner, destination string, state *model.DeliveryState) error {
+func (s *Store) SaveDelivery(notificationID, owner, destination string, state *model.DeliveryState, leaseUntil time.Time) error {
 	db, err := s.open()
 	if err != nil {
 		return err
@@ -233,6 +245,9 @@ func (s *Store) SaveDelivery(notificationID, owner, destination string, state *m
 		}
 		if len(notification.Deliveries) == 0 {
 			return bucket.Delete([]byte(notificationID))
+		}
+		if !leaseUntil.IsZero() {
+			notification.LeaseUntil = leaseUntil
 		}
 		return putJSON(bucket, []byte(notificationID), notification)
 	})

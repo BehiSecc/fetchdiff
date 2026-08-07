@@ -209,6 +209,9 @@ func (s *Service) check(ctx context.Context, target model.Target) (CheckResult, 
 		ETag:         target.ETag,
 		LastModified: target.LastModified,
 	})
+	if fetchErr != nil && ctx.Err() != nil {
+		return CheckResult{Target: target}, ctx.Err()
+	}
 	now := s.now()
 	target.LastCheckedAt = now
 	target.NextCheckAt = now.Add(target.Every)

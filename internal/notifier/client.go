@@ -23,7 +23,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const ChunkLimit = 1800
+const ChunkLimit = 900
 
 type providerSender interface {
 	Send(message, cliFormat string) error
@@ -111,7 +111,8 @@ func New(config Config) (*Client, error) {
 			errs = append(errs, fmt.Errorf("slack:%s: %w", option.ID, err))
 			continue
 		}
-		client.add("slack", option.ID, sender, false, option.SlackWebHookURL, option.SlackToken)
+		secrets := append(webhookSecrets(option.SlackWebHookURL), option.SlackToken)
+		client.add("slack", option.ID, sender, false, secrets...)
 	}
 
 	for _, option := range config.Discord {
@@ -132,7 +133,7 @@ func New(config Config) (*Client, error) {
 			errs = append(errs, fmt.Errorf("discord:%s: %w", option.ID, err))
 			continue
 		}
-		client.add("discord", option.ID, sender, false, option.DiscordWebHookURL)
+		client.add("discord", option.ID, sender, false, webhookSecrets(option.DiscordWebHookURL)...)
 	}
 
 	for _, option := range config.Telegram {
@@ -195,7 +196,7 @@ func New(config Config) (*Client, error) {
 			errs = append(errs, fmt.Errorf("smtp:%s: %w", option.ID, err))
 			continue
 		}
-		client.add("smtp", option.ID, sender, false, option.Username, option.Password)
+		client.add("smtp", option.ID, sender, false, option.Username, option.Password, url.QueryEscape(option.Password))
 	}
 
 	for _, option := range config.GoogleChat {
@@ -238,7 +239,7 @@ func New(config Config) (*Client, error) {
 			errs = append(errs, fmt.Errorf("teams:%s: %w", option.ID, err))
 			continue
 		}
-		client.add("teams", option.ID, sender, false, option.TeamsWebHookURL)
+		client.add("teams", option.ID, sender, false, webhookSecrets(option.TeamsWebHookURL)...)
 	}
 
 	for _, option := range config.Gotify {
@@ -434,4 +435,27 @@ func redact(message string, secrets []string) string {
 		}
 	}
 	return message
+}
+
+func webhookSecrets(raw string) []string {
+	secrets := []string{raw}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return secrets
+	}
+	if parsed.User != nil {
+		secrets = append(secrets, parsed.User.Username())
+		if password, ok := parsed.User.Password(); ok {
+			secrets = append(secrets, password)
+		}
+	}
+	for _, segment := range strings.Split(parsed.EscapedPath(), "/") {
+		if len(segment) >= 6 && segment != "services" && segment != "webhooks" && segment != "webhookb2" && segment != "IncomingWebhook" {
+			secrets = append(secrets, segment)
+		}
+	}
+	for _, values := range parsed.Query() {
+		secrets = append(secrets, values...)
+	}
+	return secrets
 }

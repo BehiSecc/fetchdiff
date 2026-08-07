@@ -67,6 +67,34 @@ func TestDuplicateYAMLKeysFail(t *testing.T) {
 	}
 }
 
+func TestLoadNotifyCompatibleConfiguration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "providers.yaml")
+	content := `slack:
+  - id: slack
+    slack_webhook_url: https://hooks.slack.com/services/T000/B000/SECRET
+    slack_icon_emoji: ":ghost:"
+custom:
+  - id: first
+    custom_webhook_url: https://example.com/one
+    custom_method: POST
+    custom_format: "{{data}}"
+  - id: second
+    custom_webhook_url: https://example.com/two
+    custom_method: POST
+    custom_format: "{{data}}"
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.Count() != 3 {
+		t.Fatalf("destinations = %v", client.Keys())
+	}
+}
+
 func TestInvalidTeamsConfigIsRejected(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "providers.yaml")
 	content := "teams:\n  - id: broken\n    teams_webhook_url: https://example.com/no-webhook\n"
@@ -94,5 +122,14 @@ func TestSplitMessagePreservesContent(t *testing.T) {
 	}
 	if rebuilt != message {
 		t.Fatalf("rebuilt message differs")
+	}
+}
+
+func TestWebhookSecretsAreRedactedFromDerivedURLs(t *testing.T) {
+	webhook := "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz-secret-token"
+	message := "delivery failed for discord://abcdefghijklmnopqrstuvwxyz-secret-token@123456789012345678"
+	redacted := redact(message, webhookSecrets(webhook))
+	if strings.Contains(redacted, "secret-token") || strings.Contains(redacted, "123456789012345678") {
+		t.Fatalf("secret remained in error: %s", redacted)
 	}
 }

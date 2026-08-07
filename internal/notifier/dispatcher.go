@@ -13,7 +13,7 @@ import (
 	"github.com/BehiSecc/fetchdiff/internal/store"
 )
 
-const deliveryLease = 10 * time.Minute
+const deliveryLease = 30 * time.Minute
 
 type DispatchReport struct {
 	Claimed   int
@@ -47,12 +47,17 @@ func (d *Dispatcher) Drain(ctx context.Context) DispatchReport {
 		return DispatchReport{Errors: []error{err}}
 	}
 	report := DispatchReport{Claimed: len(events)}
-	for _, event := range events {
+	for index, event := range events {
+		if ctx.Err() != nil {
+			d.releaseEvents(events[index:], &report)
+			break
+		}
 		d.drainEvent(ctx, event, &report)
 		if err := d.store.ReleaseNotification(event.ID, d.owner); err != nil {
 			report.Errors = append(report.Errors, err)
 		}
 		if ctx.Err() != nil {
+			d.releaseEvents(events[index+1:], &report)
 			break
 		}
 	}
@@ -61,6 +66,14 @@ func (d *Dispatcher) Drain(ctx context.Context) DispatchReport {
 		report.Errors = append(report.Errors, err)
 	}
 	return report
+}
+
+func (d *Dispatcher) releaseEvents(events []model.Notification, report *DispatchReport) {
+	for _, event := range events {
+		if err := d.store.ReleaseNotification(event.ID, d.owner); err != nil {
+			report.Errors = append(report.Errors, err)
+		}
+	}
 }
 
 func (d *Dispatcher) drainEvent(ctx context.Context, event model.Notification, report *DispatchReport) {
@@ -81,6 +94,11 @@ func (d *Dispatcher) drainEvent(ctx context.Context, event model.Notification, r
 		}
 		failed := false
 		for state.NextChunk < len(chunks) {
+			if err := d.store.SaveDelivery(event.ID, d.owner, key, &state, d.now().Add(deliveryLease)); err != nil {
+				report.Errors = append(report.Errors, err)
+				failed = true
+				break
+			}
 			data := make(map[string]string, len(event.Data)+3)
 			for dataKey, value := range event.Data {
 				data[dataKey] = value
@@ -99,7 +117,7 @@ func (d *Dispatcher) drainEvent(ctx context.Context, event model.Notification, r
 			state.LastAttemptAt = d.now()
 			state.NextAttemptAt = time.Time{}
 			if state.NextChunk < len(chunks) {
-				if err := d.store.SaveDelivery(event.ID, d.owner, key, &state); err != nil {
+				if err := d.store.SaveDelivery(event.ID, d.owner, key, &state, d.now().Add(deliveryLease)); err != nil {
 					report.Errors = append(report.Errors, err)
 					failed = true
 					break
@@ -109,7 +127,7 @@ func (d *Dispatcher) drainEvent(ctx context.Context, event model.Notification, r
 		if failed {
 			continue
 		}
-		if err := d.store.SaveDelivery(event.ID, d.owner, key, nil); err != nil {
+		if err := d.store.SaveDelivery(event.ID, d.owner, key, nil, time.Time{}); err != nil {
 			report.Errors = append(report.Errors, err)
 			continue
 		}
@@ -122,7 +140,7 @@ func (d *Dispatcher) fail(eventID, key string, state *model.DeliveryState, deliv
 	state.LastAttemptAt = d.now()
 	state.NextAttemptAt = state.LastAttemptAt.Add(retryDelay(state.Attempts))
 	state.LastError = deliveryErr.Error()
-	if err := d.store.SaveDelivery(eventID, d.owner, key, state); err != nil {
+	if err := d.store.SaveDelivery(eventID, d.owner, key, state, d.now().Add(deliveryLease)); err != nil {
 		report.Errors = append(report.Errors, errors.Join(deliveryErr, err))
 		return
 	}
