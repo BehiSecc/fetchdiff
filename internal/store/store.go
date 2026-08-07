@@ -21,9 +21,10 @@ import (
 )
 
 var (
-	targetsBucket = []byte("targets")
-	namesBucket   = []byte("names")
-	historyBucket = []byte("history")
+	targetsBucket       = []byte("targets")
+	namesBucket         = []byte("names")
+	historyBucket       = []byte("history")
+	notificationsBucket = []byte("notifications")
 )
 
 var ErrTargetChanged = errors.New("target changed during check")
@@ -47,7 +48,7 @@ func (s *Store) Initialize() error {
 		return err
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{targetsBucket, namesBucket, historyBucket} {
+		for _, name := range [][]byte{targetsBucket, namesBucket, historyBucket, notificationsBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return fmt.Errorf("create database bucket: %w", err)
 			}
@@ -97,6 +98,10 @@ func (s *Store) CreateTarget(target model.Target, entry model.HistoryEntry) erro
 }
 
 func (s *Store) UpdateTarget(target model.Target, expectedRevision uint64, entries ...model.HistoryEntry) error {
+	return s.CommitTarget(target, expectedRevision, entries, nil)
+}
+
+func (s *Store) CommitTarget(target model.Target, expectedRevision uint64, entries []model.HistoryEntry, notifications []model.Notification) error {
 	db, err := s.open()
 	if err != nil {
 		return err
@@ -122,8 +127,172 @@ func (s *Store) UpdateTarget(target model.Target, expectedRevision uint64, entri
 				return err
 			}
 		}
+		for _, notification := range notifications {
+			if notification.ID == "" {
+				return errors.New("notification ID cannot be empty")
+			}
+			if len(notification.Deliveries) == 0 {
+				continue
+			}
+			if err := putJSON(tx.Bucket(notificationsBucket), []byte(notification.ID), notification); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
+}
+
+func (s *Store) ClaimNotifications(now time.Time, owner string, lease time.Duration, limit int) ([]model.Notification, error) {
+	if owner == "" {
+		return nil, errors.New("notification lease owner cannot be empty")
+	}
+	if lease <= 0 {
+		return nil, errors.New("notification lease must be positive")
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	db, err := s.open()
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	var claimed []model.Notification
+	err = db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(notificationsBucket)
+		var keys [][]byte
+		if err := bucket.ForEach(func(key, value []byte) error {
+			if len(keys) >= limit {
+				return nil
+			}
+			var notification model.Notification
+			if err := json.Unmarshal(value, &notification); err != nil {
+				return fmt.Errorf("decode notification: %w", err)
+			}
+			if notification.LeaseOwner != "" && notification.LeaseUntil.After(now) {
+				return nil
+			}
+			due := false
+			for _, delivery := range notification.Deliveries {
+				if !delivery.NextAttemptAt.After(now) {
+					due = true
+					break
+				}
+			}
+			if !due {
+				return nil
+			}
+			keys = append(keys, append([]byte(nil), key...))
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, key := range keys {
+			var notification model.Notification
+			if err := json.Unmarshal(bucket.Get(key), &notification); err != nil {
+				return fmt.Errorf("decode notification: %w", err)
+			}
+			notification.LeaseOwner = owner
+			notification.LeaseUntil = now.Add(lease)
+			if err := putJSON(bucket, key, notification); err != nil {
+				return err
+			}
+			claimed = append(claimed, notification)
+		}
+		return nil
+	})
+	return claimed, err
+}
+
+func (s *Store) SaveDelivery(notificationID, owner, destination string, state *model.DeliveryState) error {
+	db, err := s.open()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(notificationsBucket)
+		data := bucket.Get([]byte(notificationID))
+		if data == nil {
+			return fmt.Errorf("notification %q not found", notificationID)
+		}
+		var notification model.Notification
+		if err := json.Unmarshal(data, &notification); err != nil {
+			return fmt.Errorf("decode notification: %w", err)
+		}
+		if notification.LeaseOwner != owner {
+			return fmt.Errorf("notification %q lease was lost", notificationID)
+		}
+		if _, exists := notification.Deliveries[destination]; !exists {
+			return fmt.Errorf("notification destination %q not found", destination)
+		}
+		if state == nil {
+			delete(notification.Deliveries, destination)
+		} else {
+			notification.Deliveries[destination] = *state
+		}
+		if len(notification.Deliveries) == 0 {
+			return bucket.Delete([]byte(notificationID))
+		}
+		return putJSON(bucket, []byte(notificationID), notification)
+	})
+}
+
+func (s *Store) ReleaseNotification(notificationID, owner string) error {
+	db, err := s.open()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	return db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(notificationsBucket)
+		data := bucket.Get([]byte(notificationID))
+		if data == nil {
+			return nil
+		}
+		var notification model.Notification
+		if err := json.Unmarshal(data, &notification); err != nil {
+			return fmt.Errorf("decode notification: %w", err)
+		}
+		if notification.LeaseOwner != owner {
+			return nil
+		}
+		notification.LeaseOwner = ""
+		notification.LeaseUntil = time.Time{}
+		return putJSON(bucket, []byte(notificationID), notification)
+	})
+}
+
+func (s *Store) Notifications() ([]model.Notification, error) {
+	db, err := s.open()
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	var notifications []model.Notification
+	err = db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(notificationsBucket).ForEach(func(_, value []byte) error {
+			var notification model.Notification
+			if err := json.Unmarshal(value, &notification); err != nil {
+				return fmt.Errorf("decode notification: %w", err)
+			}
+			notifications = append(notifications, notification)
+			return nil
+		})
+	})
+	sort.Slice(notifications, func(i, j int) bool { return notifications[i].CreatedAt.Before(notifications[j].CreatedAt) })
+	return notifications, err
+}
+
+func (s *Store) NotificationCounts() (events, destinations int, err error) {
+	notifications, err := s.Notifications()
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, notification := range notifications {
+		destinations += len(notification.Deliveries)
+	}
+	return len(notifications), destinations, nil
 }
 
 func (s *Store) Target(nameOrID string) (model.Target, error) {

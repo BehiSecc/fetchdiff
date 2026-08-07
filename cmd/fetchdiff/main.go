@@ -19,6 +19,7 @@ import (
 	"github.com/BehiSecc/fetchdiff/internal/config"
 	"github.com/BehiSecc/fetchdiff/internal/fetch"
 	"github.com/BehiSecc/fetchdiff/internal/model"
+	"github.com/BehiSecc/fetchdiff/internal/notifier"
 	"github.com/BehiSecc/fetchdiff/internal/schedule"
 	"github.com/BehiSecc/fetchdiff/internal/store"
 	"github.com/spf13/cobra"
@@ -37,9 +38,12 @@ type cli struct {
 }
 
 type runtime struct {
-	service *app.Service
-	store   *store.Store
-	paths   config.Paths
+	service       *app.Service
+	store         *store.Store
+	paths         config.Paths
+	notifications *notifier.Client
+	dispatcher    *notifier.Dispatcher
+	notifyErr     error
 }
 
 func main() {
@@ -103,8 +107,34 @@ func (c *cli) open() (*runtime, error) {
 	if err := state.Initialize(); err != nil {
 		return nil, err
 	}
+	notificationClient, notifyErr := notifier.Load(paths.Providers)
+	var destinationKeys []string
+	if notifyErr == nil {
+		destinationKeys = notificationClient.Keys()
+	}
 	fetcher := fetch.New(fetch.Options{Timeout: c.timeout, MaxRetries: c.retries, DisableRetries: c.retries == 0, MaxRedirects: c.redirects, UserAgent: c.userAgent})
-	return &runtime{service: app.New(state, fetcher), store: state, paths: paths}, nil
+	runtime := &runtime{
+		service: app.New(state, fetcher, destinationKeys...), store: state, paths: paths,
+		notifications: notificationClient, notifyErr: notifyErr,
+	}
+	if notificationClient != nil {
+		runtime.dispatcher = notifier.NewDispatcher(notificationClient, state)
+	}
+	return runtime, nil
+}
+
+func (r *runtime) validateNotifications() error {
+	if r.notifyErr != nil {
+		return fmt.Errorf("notification configuration: %w", r.notifyErr)
+	}
+	return nil
+}
+
+func (r *runtime) drain(ctx context.Context) notifier.DispatchReport {
+	if r.dispatcher == nil {
+		return notifier.DispatchReport{}
+	}
+	return r.dispatcher.Drain(ctx)
 }
 
 func (c *cli) addCommand() *cobra.Command {
@@ -150,27 +180,37 @@ func (c *cli) checkCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := runtime.validateNotifications(); err != nil {
+				return err
+			}
+			if force && len(args) == 0 {
+				return errors.New("--force requires a target name")
+			}
+			before := runtime.drain(cmd.Context())
 			if len(args) == 1 {
 				result, checkErr := runtime.service.CheckTarget(cmd.Context(), args[0], force)
 				if result.Skipped {
 					fmt.Fprintf(c.out, "%s is not due; next check %s\n", result.Target.Name, formatTime(result.Target.NextCheckAt))
-					return nil
+					renderDispatch(c.out, before)
+					return before.Err()
 				}
 				renderResult(c.out, runtime.service, result)
-				return checkErr
-			}
-			if force {
-				return errors.New("--force requires a target name")
+				after := runtime.drain(cmd.Context())
+				renderDispatch(c.out, before, after)
+				return errors.Join(checkErr, before.Err(), after.Err())
 			}
 			results, checkErr := runtime.service.CheckDue(cmd.Context())
 			if len(results) == 0 {
 				fmt.Fprintln(c.out, "No targets are due.")
-				return checkErr
+				renderDispatch(c.out, before)
+				return errors.Join(checkErr, before.Err())
 			}
 			for _, result := range results {
 				renderResult(c.out, runtime.service, result)
 			}
-			return checkErr
+			after := runtime.drain(cmd.Context())
+			renderDispatch(c.out, before, after)
+			return errors.Join(checkErr, before.Err(), after.Err())
 		},
 	}
 	command.Flags().BoolVar(&force, "force", false, "check now even when the target is not due")
@@ -186,8 +226,13 @@ func (c *cli) watchCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := runtime.validateNotifications(); err != nil {
+				return err
+			}
 			fmt.Fprintf(c.out, "Watching targets. State: %s\n", runtime.paths.Root)
 			for {
+				before := runtime.drain(cmd.Context())
+				renderDispatch(c.out, before)
 				results, checkErr := runtime.service.CheckDue(cmd.Context())
 				hasOperationalError := false
 				for _, result := range results {
@@ -202,6 +247,8 @@ func (c *cli) watchCommand() *cobra.Command {
 				if checkErr != nil && hasOperationalError && !errors.Is(checkErr, context.Canceled) {
 					fmt.Fprintln(c.errOut, "Check error:", checkErr)
 				}
+				after := runtime.drain(cmd.Context())
+				renderDispatch(c.out, after)
 				if err := cmd.Context().Err(); err != nil {
 					fmt.Fprintln(c.out, "Watcher stopped.")
 					return nil
@@ -334,7 +381,17 @@ func (c *cli) statusCommand() *cobra.Command {
 					failing++
 				}
 			}
-			fmt.Fprintf(c.out, "Targets: %d\nDue: %d\nFailing: %d\nState: %s\n", len(targets), due, failing, runtime.paths.Root)
+			_, pending, err := runtime.store.NotificationCounts()
+			if err != nil {
+				return err
+			}
+			notificationStatus := "disabled"
+			if runtime.notifyErr != nil {
+				notificationStatus = "invalid (run fetchdiff doctor)"
+			} else if runtime.notifications.Count() > 0 {
+				notificationStatus = fmt.Sprintf("enabled (%d destinations)", runtime.notifications.Count())
+			}
+			fmt.Fprintf(c.out, "Targets: %d\nDue: %d\nFailing: %d\nNotifications: %s\nPending deliveries: %d\nState: %s\n", len(targets), due, failing, notificationStatus, pending, runtime.paths.Root)
 			return nil
 		},
 	}
@@ -352,21 +409,57 @@ func (c *cli) doctorCommand() *cobra.Command {
 			if err := doctor(runtime); err != nil {
 				return err
 			}
-			fmt.Fprintf(c.out, "✓ Data directory is writable and private\n✓ State database is readable\n✓ Snapshots are present and valid\n\nState: %s\n", runtime.paths.Root)
+			notificationStatus := "disabled (edit " + runtime.paths.Providers + ")"
+			if runtime.notifications.Count() > 0 {
+				notificationStatus = fmt.Sprintf("valid (%d destinations)", runtime.notifications.Count())
+			}
+			fmt.Fprintf(c.out, "✓ Data directory is writable and private\n✓ State database is readable\n✓ Snapshots are present and valid\n✓ Provider configuration is %s\n\nState: %s\n", notificationStatus, runtime.paths.Root)
 			return nil
 		},
 	}
 }
 
 func (c *cli) notifyTestCommand() *cobra.Command {
-	return &cobra.Command{
+	var providers []string
+	var ids []string
+	command := &cobra.Command{
 		Use:   "notify-test",
-		Short: "Print a sample future notification",
-		Run: func(_ *cobra.Command, _ []string) {
-			fmt.Fprint(c.out, "Notification delivery is not implemented yet.\n\n")
-			fmt.Fprintln(c.out, "🔄 JavaScript changed · production-js\n\nhttps://cdn.example.com/app.js\n\nSize: 184 KB → 191 KB (+7 KB)\nLines: +34 / -12\nHash: 93d4a17 → b83cf02\nStatus: 200 OK\nChecked: 2026-08-07 14:00 UTC")
+		Short: "Send a test through configured notification providers",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			runtime, err := c.open()
+			if err != nil {
+				return err
+			}
+			if err := runtime.validateNotifications(); err != nil {
+				return err
+			}
+			if runtime.notifications.Count() == 0 {
+				return fmt.Errorf("no notification providers configured; edit %s", runtime.paths.Providers)
+			}
+			filter := notifier.Filter{Providers: providers, IDs: ids}
+			if len(runtime.notifications.Select(filter)) == 0 {
+				return errors.New("no notification destination matches the selected provider or id")
+			}
+			message := notifier.Message{
+				Text: fmt.Sprintf("✅ FetchDiff notification test\n\nProvider delivery is working.\nChecked: %s", formatTime(time.Now().UTC())),
+				Data: map[string]string{"event": "test", "name": "notification-test", "checked": time.Now().UTC().Format(time.RFC3339)},
+			}
+			results := runtime.notifications.SendAll(cmd.Context(), message, filter)
+			var failures []error
+			for _, result := range results {
+				if result.Err != nil {
+					fmt.Fprintf(c.out, "✗ %s: %v\n", result.Key, result.Err)
+					failures = append(failures, fmt.Errorf("%s: %w", result.Key, result.Err))
+					continue
+				}
+				fmt.Fprintf(c.out, "✓ %s\n", result.Key)
+			}
+			return errors.Join(failures...)
 		},
 	}
+	command.Flags().StringSliceVar(&providers, "provider", nil, "provider type to test, such as discord or telegram")
+	command.Flags().StringSliceVar(&ids, "id", nil, "configured provider id to test")
+	return command
 }
 
 func renderResult(out io.Writer, service *app.Service, result app.CheckResult) {
@@ -409,6 +502,26 @@ func shouldRenderWatch(result app.CheckResult) bool {
 		return result.FailureReached
 	}
 	return result.Changed || result.Recovered || result.History.StatusChanged || result.History.RedirectChanged
+}
+
+func renderDispatch(out io.Writer, reports ...notifier.DispatchReport) {
+	delivered := 0
+	pending := 0
+	var failures []error
+	for _, report := range reports {
+		delivered += report.Delivered
+		pending = report.Pending
+		failures = append(failures, report.Errors...)
+	}
+	if delivered > 0 {
+		fmt.Fprintf(out, "✓ Notifications sent: %d\n", delivered)
+	}
+	if len(failures) > 0 {
+		fmt.Fprintf(out, "⚠ Notifications pending: %d (will retry)\n", pending)
+		for _, err := range failures {
+			fmt.Fprintf(out, "  %v\n", err)
+		}
+	}
 }
 
 func printChange(out io.Writer, revision app.RevisionDiff) {
@@ -468,10 +581,15 @@ func doctor(runtime *runtime) error {
 			return fmt.Errorf("%s permissions are too broad: %o", path, info.Mode().Perm())
 		}
 	}
-	if info, err := os.Stat(runtime.paths.Database); err != nil {
+	for _, path := range []string{runtime.paths.Database, runtime.paths.Providers} {
+		if info, err := os.Stat(path); err != nil {
+			return err
+		} else if info.Mode().Perm()&0o077 != 0 {
+			return fmt.Errorf("%s permissions are too broad: %o", path, info.Mode().Perm())
+		}
+	}
+	if err := runtime.validateNotifications(); err != nil {
 		return err
-	} else if info.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("%s permissions are too broad: %o", runtime.paths.Database, info.Mode().Perm())
 	}
 	targets, err := runtime.service.Targets()
 	if err != nil {
@@ -496,6 +614,17 @@ func doctor(runtime *runtime) error {
 				return fmt.Errorf("%s snapshot %s hash mismatch", target.Name, shortHash(entry.Hash))
 			}
 			checked[entry.Hash] = true
+		}
+	}
+	notifications, err := runtime.store.Notifications()
+	if err != nil {
+		return err
+	}
+	for _, notification := range notifications {
+		for destination := range notification.Deliveries {
+			if !runtime.notifications.Has(destination) {
+				return fmt.Errorf("pending notification references removed destination %q", destination)
+			}
 		}
 	}
 	return nil

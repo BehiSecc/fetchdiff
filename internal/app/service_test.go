@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -36,7 +37,7 @@ func (f *fakeFetcher) Fetch(_ context.Context, request fetch.Request) (fetch.Res
 	return step.response, step.err
 }
 
-func newTestService(t *testing.T, fetcher Fetcher) (*Service, *store.Store) {
+func newTestService(t *testing.T, fetcher Fetcher, destinations ...string) (*Service, *store.Store) {
 	t.Helper()
 	paths, err := config.ResolvePaths(filepath.Join(t.TempDir(), "data"))
 	if err != nil {
@@ -46,7 +47,7 @@ func newTestService(t *testing.T, fetcher Fetcher) (*Service, *store.Store) {
 	if err := state.Initialize(); err != nil {
 		t.Fatal(err)
 	}
-	return New(state, fetcher), state
+	return New(state, fetcher, destinations...), state
 }
 
 func baselineResponse(content string) fetch.Response {
@@ -260,5 +261,75 @@ func TestOverlappingChecksCannotRollBackState(t *testing.T) {
 	}
 	if target.SnapshotHash != contentHash([]byte("const value=3")) {
 		t.Fatalf("final hash = %s", target.SnapshotHash)
+	}
+}
+
+func TestChangedCheckQueuesFullNotificationAtomically(t *testing.T) {
+	fake := &fakeFetcher{steps: []fetchStep{
+		{response: baselineResponse(`function value(){return 1}`)},
+		{response: baselineResponse(`function value(){return 2}`)},
+	}}
+	service, state := newTestService(t, fake, "custom:webhook")
+	now := time.Now().UTC()
+	service.now = func() time.Time { return now }
+	if _, err := service.Add(context.Background(), AddInput{Name: "app", URL: "https://cdn.example.com/app.js", Every: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	if _, err := service.CheckTarget(context.Background(), "app", true); err != nil {
+		t.Fatal(err)
+	}
+	notifications, err := state.Notifications()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(notifications) != 1 {
+		t.Fatalf("notifications = %#v", notifications)
+	}
+	if !strings.Contains(notifications[0].Text, "return 2") || !strings.Contains(notifications[0].Text, "@@") {
+		t.Fatalf("notification does not contain the full diff:\n%s", notifications[0].Text)
+	}
+	if _, ok := notifications[0].Deliveries["custom:webhook"]; !ok {
+		t.Fatalf("deliveries = %#v", notifications[0].Deliveries)
+	}
+}
+
+func TestFailureThresholdAndRecoveryQueueOnce(t *testing.T) {
+	failure := &fetch.Error{StatusCode: 500, Status: "500 Internal Server Error", Fingerprint: "http:500", Err: errors.New("server error")}
+	fake := &fakeFetcher{steps: []fetchStep{
+		{response: baselineResponse("good")},
+		{response: fetch.Response{StatusCode: 500}, err: failure},
+		{response: fetch.Response{StatusCode: 500}, err: failure},
+		{response: fetch.Response{StatusCode: 500}, err: failure},
+		{response: fetch.Response{StatusCode: 500}, err: failure},
+		{response: baselineResponse("good")},
+	}}
+	service, state := newTestService(t, fake, "custom:webhook")
+	now := time.Now().UTC()
+	service.now = func() time.Time { return now }
+	if _, err := service.Add(context.Background(), AddInput{Name: "app", URL: "https://cdn.example.com/app.js", Every: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	for range 4 {
+		now = now.Add(time.Minute)
+		_, _ = service.CheckTarget(context.Background(), "app", true)
+	}
+	events, _, err := state.NotificationCounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events != 1 {
+		t.Fatalf("failure events = %d, want 1", events)
+	}
+	now = now.Add(time.Minute)
+	if _, err := service.CheckTarget(context.Background(), "app", true); err != nil {
+		t.Fatal(err)
+	}
+	events, _, err = state.NotificationCounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events != 2 {
+		t.Fatalf("events after recovery = %d, want 2", events)
 	}
 }

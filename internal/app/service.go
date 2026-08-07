@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"regexp"
 	"strings"
@@ -29,9 +30,10 @@ type Fetcher interface {
 }
 
 type Service struct {
-	store   *store.Store
-	fetcher Fetcher
-	now     func() time.Time
+	store                    *store.Store
+	fetcher                  Fetcher
+	notificationDestinations []string
+	now                      func() time.Time
 }
 
 type AddInput struct {
@@ -59,8 +61,12 @@ type RevisionDiff struct {
 	Diff     compare.Diff
 }
 
-func New(store *store.Store, fetcher Fetcher) *Service {
-	return &Service{store: store, fetcher: fetcher, now: func() time.Time { return time.Now().UTC() }}
+func New(store *store.Store, fetcher Fetcher, notificationDestinations ...string) *Service {
+	return &Service{
+		store: store, fetcher: fetcher,
+		notificationDestinations: append([]string(nil), notificationDestinations...),
+		now:                      func() time.Time { return time.Now().UTC() },
+	}
 }
 
 func (s *Service) Targets() ([]model.Target, error) {
@@ -230,7 +236,11 @@ func (s *Service) check(ctx context.Context, target model.Target) (CheckResult, 
 			RedirectChanged:    response.EffectiveURL != "" && response.EffectiveURL != target.EffectiveURL,
 			Error:              fetchErr.Error(),
 		}
-		if err := s.store.UpdateTarget(target, expectedRevision, entry); err != nil {
+		var notifications []model.Notification
+		if reached {
+			notifications = s.notification(model.OutcomeFailure, target, failureMessage(target, entry), entry.CheckedAt)
+		}
+		if err := s.store.CommitTarget(target, expectedRevision, []model.HistoryEntry{entry}, notifications); err != nil {
 			return CheckResult{}, errors.Join(fetchErr, err)
 		}
 		return CheckResult{Target: target, History: entry, FailureReached: reached}, fetchErr
@@ -304,7 +314,11 @@ func (s *Service) check(ctx context.Context, target model.Target) (CheckResult, 
 		RedirectChanged:    redirectChanged,
 		Recovered:          wasReported,
 	}
-	if err := s.store.UpdateTarget(target, expectedRevision, entry); err != nil {
+	notifications, err := s.successNotifications(previous, target, entry)
+	if err != nil {
+		return CheckResult{}, err
+	}
+	if err := s.store.CommitTarget(target, expectedRevision, []model.HistoryEntry{entry}, notifications); err != nil {
 		return CheckResult{}, err
 	}
 	return CheckResult{
@@ -315,6 +329,138 @@ func (s *Service) check(ctx context.Context, target model.Target) (CheckResult, 
 		PreviousSize: previous.SnapshotSize,
 		Recovered:    wasReported,
 	}, nil
+}
+
+func (s *Service) successNotifications(previous, target model.Target, entry model.HistoryEntry) ([]model.Notification, error) {
+	if len(s.notificationDestinations) == 0 {
+		return nil, nil
+	}
+	if entry.Outcome == model.OutcomeChanged {
+		oldContent, err := s.store.Snapshot(previous.SnapshotHash)
+		if err != nil {
+			return nil, err
+		}
+		newContent, err := s.store.Snapshot(target.SnapshotHash)
+		if err != nil {
+			return nil, err
+		}
+		diff, err := compare.Build(oldContent, newContent, target.ResourceType, shortHash(previous.SnapshotHash), shortHash(target.SnapshotHash))
+		if err != nil {
+			return nil, err
+		}
+		return s.notification(model.OutcomeChanged, target, changeMessage(previous, target, entry, diff), entry.CheckedAt), nil
+	}
+	if entry.Recovered {
+		return s.notification(model.OutcomeRecovery, target, recoveryMessage(target, entry), entry.CheckedAt), nil
+	}
+	if entry.StatusChanged || entry.RedirectChanged {
+		return s.notification("metadata", target, metadataMessage(target, entry), entry.CheckedAt), nil
+	}
+	return nil, nil
+}
+
+func (s *Service) notification(kind string, target model.Target, text string, createdAt time.Time) []model.Notification {
+	if len(s.notificationDestinations) == 0 {
+		return nil
+	}
+	deliveries := make(map[string]model.DeliveryState, len(s.notificationDestinations))
+	for _, destination := range s.notificationDestinations {
+		deliveries[destination] = model.DeliveryState{}
+	}
+	return []model.Notification{{
+		ID: newID(), Kind: kind, TargetID: target.ID, TargetName: target.Name,
+		CreatedAt: createdAt, Text: text,
+		Data: map[string]string{
+			"url": target.URL, "name": target.Name, "type": target.ResourceType,
+			"hash": target.SnapshotHash, "status": fmt.Sprintf("%d", target.StatusCode),
+			"checked": createdAt.UTC().Format(time.RFC3339),
+		},
+		Deliveries: deliveries,
+	}}
+}
+
+func changeMessage(previous, target model.Target, entry model.HistoryEntry, diff compare.Diff) string {
+	var output strings.Builder
+	fmt.Fprintf(&output, "🔄 %s changed · %s\n\n%s\n\n", target.ResourceType, target.Name, target.URL)
+	fmt.Fprintf(&output, "Size: %s → %s (%s)\n", humanBytes(previous.SnapshotSize), humanBytes(target.SnapshotSize), signedBytes(target.SnapshotSize-previous.SnapshotSize))
+	fmt.Fprintf(&output, "Lines: +%d / -%d\n", diff.Added, diff.Removed)
+	fmt.Fprintf(&output, "Hash: %s → %s\n", shortHash(previous.SnapshotHash), shortHash(target.SnapshotHash))
+	fmt.Fprintf(&output, "Status: %d %s\n", target.StatusCode, http.StatusText(target.StatusCode))
+	if entry.StatusChanged {
+		fmt.Fprintf(&output, "Status change: %d → %d\n", entry.PreviousStatusCode, entry.StatusCode)
+	}
+	if entry.RedirectChanged {
+		fmt.Fprintf(&output, "Redirect: %s → %s\n", entry.PreviousURL, entry.EffectiveURL)
+	}
+	if entry.Recovered {
+		fmt.Fprintln(&output, "Recovery: target is healthy again")
+	}
+	fmt.Fprintf(&output, "Checked: %s\n", displayTime(entry.CheckedAt))
+	if diff.FormatNote != "" {
+		fmt.Fprintf(&output, "Note: %s\n", diff.FormatNote)
+	}
+	fmt.Fprintln(&output)
+	output.WriteString(diff.Text)
+	return output.String()
+}
+
+func failureMessage(target model.Target, entry model.HistoryEntry) string {
+	return fmt.Sprintf("❌ Check failed · %s\n\n%s\n\nConsecutive failures: %d\nError: %s\nLast good hash: %s\nChecked: %s",
+		target.Name, target.URL, target.ConsecutiveFailures, entry.Error, shortHash(target.SnapshotHash), displayTime(entry.CheckedAt))
+}
+
+func recoveryMessage(target model.Target, entry model.HistoryEntry) string {
+	var output strings.Builder
+	fmt.Fprintf(&output, "✅ Recovered · %s\n\n%s\n\nStatus: %d %s\n", target.Name, target.URL, target.StatusCode, http.StatusText(target.StatusCode))
+	if entry.StatusChanged {
+		fmt.Fprintf(&output, "Status change: %d → %d\n", entry.PreviousStatusCode, entry.StatusCode)
+	}
+	if entry.RedirectChanged {
+		fmt.Fprintf(&output, "Redirect: %s → %s\n", entry.PreviousURL, entry.EffectiveURL)
+	}
+	fmt.Fprintf(&output, "Checked: %s", displayTime(entry.CheckedAt))
+	return output.String()
+}
+
+func metadataMessage(target model.Target, entry model.HistoryEntry) string {
+	var output strings.Builder
+	fmt.Fprintf(&output, "↪ Metadata changed · %s\n\n%s\n\n", target.Name, target.URL)
+	if entry.StatusChanged {
+		fmt.Fprintf(&output, "Status: %d → %d\n", entry.PreviousStatusCode, entry.StatusCode)
+	}
+	if entry.RedirectChanged {
+		fmt.Fprintf(&output, "Redirect: %s → %s\n", entry.PreviousURL, entry.EffectiveURL)
+	}
+	fmt.Fprintf(&output, "Checked: %s", displayTime(entry.CheckedAt))
+	return output.String()
+}
+
+func humanBytes(size int64) string {
+	if size < 1024 {
+		return fmt.Sprintf("%d B", size)
+	}
+	value := float64(size)
+	for _, suffix := range []string{"KB", "MB", "GB"} {
+		value /= 1024
+		if value < 1024 || suffix == "GB" {
+			return fmt.Sprintf("%.1f %s", value, suffix)
+		}
+	}
+	return fmt.Sprintf("%d B", size)
+}
+
+func signedBytes(size int64) string {
+	if size > 0 {
+		return "+" + humanBytes(size)
+	}
+	if size < 0 {
+		return "-" + humanBytes(-size)
+	}
+	return "0 B"
+}
+
+func displayTime(value time.Time) string {
+	return value.UTC().Format("2006-01-02 15:04 UTC")
 }
 
 func (s *Service) RevisionDiff(name string) (RevisionDiff, error) {

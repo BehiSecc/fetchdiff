@@ -96,3 +96,41 @@ func TestUpdateTargetRejectsStaleRevision(t *testing.T) {
 		t.Fatalf("stale update error = %v", err)
 	}
 }
+
+func TestNotificationClaimAndDelivery(t *testing.T) {
+	store := newTestStore(t)
+	now := time.Now().UTC()
+	target := model.Target{ID: "target-1", Revision: 1, Name: "app", URL: "https://example.com/app.js"}
+	entry := model.HistoryEntry{TargetID: target.ID, CheckedAt: now, Outcome: model.OutcomeBaseline}
+	if err := store.CreateTarget(target, entry); err != nil {
+		t.Fatal(err)
+	}
+	target.Revision = 2
+	notification := model.Notification{
+		ID: "event-1", TargetID: target.ID, TargetName: target.Name, CreatedAt: now, Text: "changed",
+		Deliveries: map[string]model.DeliveryState{"custom:webhook": {NextAttemptAt: now}},
+	}
+	if err := store.CommitTarget(target, 1, nil, []model.Notification{notification}); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := store.ClaimNotifications(now, "worker-1", time.Minute, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(claimed) != 1 || claimed[0].ID != notification.ID {
+		t.Fatalf("claimed = %#v", claimed)
+	}
+	if second, err := store.ClaimNotifications(now, "worker-2", time.Minute, 10); err != nil || len(second) != 0 {
+		t.Fatalf("second claim = %#v, %v", second, err)
+	}
+	if err := store.SaveDelivery(notification.ID, "worker-1", "custom:webhook", nil); err != nil {
+		t.Fatal(err)
+	}
+	events, destinations, err := store.NotificationCounts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events != 0 || destinations != 0 {
+		t.Fatalf("counts = %d events, %d destinations", events, destinations)
+	}
+}

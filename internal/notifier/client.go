@@ -283,11 +283,7 @@ func New(config Config) (*Client, error) {
 			errs = append(errs, fmt.Errorf("custom:%s has an invalid method or URL", option.ID))
 			continue
 		}
-		sender, err := custom.New([]*custom.Options{option}, nil)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("custom:%s: %w", option.ID, err))
-			continue
-		}
+		sender := newCustomSender(option)
 		secrets := []string{option.CustomWebhookURL}
 		for _, value := range option.CustomHeaders {
 			secrets = append(secrets, value)

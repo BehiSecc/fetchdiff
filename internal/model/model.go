@@ -58,3 +58,24 @@ type HistoryEntry struct {
 	Recovered          bool      `json:"recovered,omitempty"`
 	Error              string    `json:"error,omitempty"`
 }
+
+type Notification struct {
+	ID         string                   `json:"id"`
+	Kind       string                   `json:"kind"`
+	TargetID   string                   `json:"target_id"`
+	TargetName string                   `json:"target_name"`
+	CreatedAt  time.Time                `json:"created_at"`
+	Text       string                   `json:"text"`
+	Data       map[string]string        `json:"data,omitempty"`
+	Deliveries map[string]DeliveryState `json:"deliveries"`
+	LeaseOwner string                   `json:"lease_owner,omitempty"`
+	LeaseUntil time.Time                `json:"lease_until,omitempty"`
+}
+
+type DeliveryState struct {
+	NextChunk     int       `json:"next_chunk"`
+	Attempts      int       `json:"attempts"`
+	NextAttemptAt time.Time `json:"next_attempt_at"`
+	LastAttemptAt time.Time `json:"last_attempt_at,omitempty"`
+	LastError     string    `json:"last_error,omitempty"`
+}
