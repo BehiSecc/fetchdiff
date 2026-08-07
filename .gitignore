@@ -1,0 +1,4 @@
+/fetchdiff
+/dist/
+*.test
+*.out
