@@ -81,6 +81,7 @@ func newRootCommand(out, errOut io.Writer) *cobra.Command {
 		c.checkCommand(),
 		c.watchCommand(),
 		c.listCommand(),
+		c.showCommand(),
 		c.historyCommand(),
 		c.diffCommand(),
 		c.statusCommand(),
@@ -391,12 +392,28 @@ func (c *cli) listCommand() *cobra.Command {
 				fmt.Fprintln(c.out, "No targets configured.")
 				return nil
 			}
-			writer := tabwriter.NewWriter(c.out, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(writer, "NAME\tTYPE\tEVERY\tHEALTH\tLAST CHECK\tNEXT CHECK\tURL")
-			for _, target := range targets {
-				fmt.Fprintf(writer, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n", target.Name, target.ResourceType, target.Every, health(target), formatTime(target.LastCheckedAt), formatTime(target.NextCheckAt), target.URL)
+			renderTargetTable(c.out, targets, colorEnabled(c.out))
+			return nil
+		},
+	}
+}
+
+func (c *cli) showCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "show NAME",
+		Short: "Show full details for a target",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			runtime, err := c.open()
+			if err != nil {
+				return err
 			}
-			return writer.Flush()
+			target, err := runtime.service.Target(args[0])
+			if err != nil {
+				return err
+			}
+			renderTargetDetails(c.out, target, colorEnabled(c.out))
+			return nil
 		},
 	}
 }
@@ -768,13 +785,6 @@ func shortHash(hash string) string {
 		return hash
 	}
 	return hash[:8]
-}
-
-func health(target model.Target) string {
-	if target.ConsecutiveFailures > 0 {
-		return fmt.Sprintf("failing (%d)", target.ConsecutiveFailures)
-	}
-	return "healthy"
 }
 
 func appendDetail(existing, next string) string {

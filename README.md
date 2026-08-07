@@ -66,6 +66,7 @@ sudo systemctl restart fetchdiff
 
 ```sh
 fetchdiff list
+fetchdiff show production-js
 fetchdiff check
 fetchdiff check --force
 fetchdiff check production-js --force
@@ -76,7 +77,7 @@ fetchdiff status
 fetchdiff doctor
 ```
 
-`fetchdiff check` checks due targets once and exits, which is useful for cron or CI. `fetchdiff watch` runs the scheduler continuously.
+`fetchdiff list` shows a compact colored table; set `NO_COLOR=1` to disable color. Use `fetchdiff show NAME` for the full URL and metadata. `fetchdiff check` checks due targets once and exits, while `fetchdiff watch` runs continuously.
 
 ## Useful flags
 

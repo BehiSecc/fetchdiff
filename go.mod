@@ -3,6 +3,7 @@ module github.com/BehiSecc/fetchdiff
 go 1.25.0
 
 require (
+	github.com/Masterminds/sprig v2.22.0+incompatible
 	github.com/andybalholm/brotli v1.2.2
 	github.com/evanw/esbuild v0.28.1
 	github.com/pmezard/go-difflib v1.0.0
@@ -10,13 +11,13 @@ require (
 	github.com/spf13/cobra v1.8.1
 	github.com/yosssi/gohtml v0.0.0-20201013000340-ee4748c638f4
 	go.etcd.io/bbolt v1.4.3
+	golang.org/x/net v0.57.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
 require (
 	github.com/Masterminds/goutils v1.1.1 // indirect
 	github.com/Masterminds/semver v1.5.0 // indirect
-	github.com/Masterminds/sprig v2.22.0+incompatible // indirect
 	github.com/benbjohnson/clock v1.3.0 // indirect
 	github.com/containrrr/shoutrrr v0.8.0 // indirect
 	github.com/dsnet/compress v0.0.2-0.20210315054119-f66993602bf5 // indirect
@@ -50,7 +51,6 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/ratelimit v0.3.0 // indirect
 	golang.org/x/crypto v0.54.0 // indirect
-	golang.org/x/net v0.57.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	gopkg.in/djherbis/times.v1 v1.3.0 // indirect
 )

@@ -108,7 +108,7 @@ func TestCommandWorkflow(t *testing.T) {
 	if output := run("check", "production-js", "--force"); !strings.Contains(output, "function value()") || !strings.Contains(output, "return 2") {
 		t.Fatalf("check output:\n%s", output)
 	}
-	for _, command := range [][]string{{"list"}, {"history", "production-js"}, {"diff", "production-js"}, {"status"}, {"doctor"}} {
+	for _, command := range [][]string{{"list"}, {"show", "production-js"}, {"history", "production-js"}, {"diff", "production-js"}, {"status"}, {"doctor"}} {
 		if output := run(command...); strings.TrimSpace(output) == "" {
 			t.Fatalf("%s returned no output", strings.Join(command, " "))
 		}
