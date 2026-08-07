@@ -44,8 +44,7 @@ func (s *Store) Initialize() error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
-	return db.Update(func(tx *bolt.Tx) error {
+	err = db.Update(func(tx *bolt.Tx) error {
 		for _, name := range [][]byte{targetsBucket, namesBucket, historyBucket} {
 			if _, err := tx.CreateBucketIfNotExists(name); err != nil {
 				return fmt.Errorf("create database bucket: %w", err)
@@ -53,6 +52,17 @@ func (s *Store) Initialize() error {
 		}
 		return nil
 	})
+	closeErr := db.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close state database: %w", closeErr)
+	}
+	if err := os.Chmod(s.paths.Database, 0o600); err != nil {
+		return fmt.Errorf("secure state database: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) open() (*bolt.DB, error) {
