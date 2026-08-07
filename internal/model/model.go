@@ -54,5 +54,6 @@ type HistoryEntry struct {
 	PreviousURL        string    `json:"previous_url,omitempty"`
 	StatusChanged      bool      `json:"status_changed,omitempty"`
 	RedirectChanged    bool      `json:"redirect_changed,omitempty"`
+	Recovered          bool      `json:"recovered,omitempty"`
 	Error              string    `json:"error,omitempty"`
 }
