@@ -6,7 +6,7 @@ FetchDiff monitors remote JavaScript and web pages for changes. It keeps exact s
 
 ```sh
 go install github.com/BehiSecc/fetchdiff/cmd/fetchdiff@latest
-sudo install -m 0755 "$(go env GOPATH)/bin/fetchdiff" /usr/local/bin/fetchdiff
+sudo ln -sf "$(go env GOPATH)/bin/fetchdiff" /usr/local/bin/fetchdiff
 
 fetchdiff init
 ```
