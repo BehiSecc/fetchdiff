@@ -69,8 +69,25 @@ For cron, systemd, or CI, check due targets once and exit:
 fetchdiff check
 ```
 
+## Useful flags
+
+- `--name production-js` sets the target's unique name.
+- `--every 24h` sets its interval. Durations use values such as `30m`, `6h`, or `24h`.
+- `--header "Name: value"` stores a request header with the target and can be repeated.
+- `check NAME --force` checks a target immediately instead of waiting until it is due.
+- `history NAME --limit 50` controls displayed history; use `--limit 0` for all entries.
+- `--timeout 30s` sets the timeout for each HTTP attempt.
+- `--max-retries 3` controls transient retries; zero disables them.
+- `--max-redirects 10` limits followed redirects.
+- `--user-agent "MyMonitor/1.0"` changes the User-Agent for the current process.
+- `--data-dir PATH` uses a different state directory.
+
+Global HTTP and storage flags can be placed before a command:
+
+```sh
+fetchdiff --timeout 60s --max-retries 5 check production-js --force
+```
+
 FetchDiff stores private state under `~/.fetchdiff`: metadata in `state.db` and gzip-compressed snapshots under `snapshots/sha256`. Set `FETCHDIFF_DATA_DIR` or use `--data-dir` to override the location.
 
 Notification delivery is intentionally not included yet. Change and failure events are printed clearly to stdout for future integration.
-
-Requests default to a 30-second timeout, ten redirects, and three retries for transient failures. Use `--timeout`, `--max-redirects`, `--max-retries`, `--user-agent`, and repeatable `--header` flags when a target needs different HTTP behavior.
