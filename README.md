@@ -6,18 +6,21 @@ FetchDiff monitors remote JavaScript and web pages for changes. It keeps exact s
 
 ```sh
 go install github.com/BehiSecc/fetchdiff/cmd/fetchdiff@latest
-sudo ln -s "$(go env GOPATH)/bin/fetchdiff" /usr/local/bin/fetchdiff
+
+bin_dir="$(go env GOBIN)"
+[ -n "$bin_dir" ] || bin_dir="$(go env GOPATH)/bin"
+sudo install -m 0755 "$bin_dir/fetchdiff" /usr/local/bin/fetchdiff
+
+fetchdiff init
 ```
 
-Add a URL. The first fetch becomes its baseline:
+This creates the private database, snapshots directory, and provider configuration under `~/.fetchdiff`. Then add a URL; the first fetch becomes its baseline:
 
 ```sh
 fetchdiff add https://cdn.example.com/app.js \
   --name production-js \
   --every 24h
 ```
-
-FetchDiff stores its private database, snapshots, and provider configuration under `~/.fetchdiff`.
 
 ## Notifications
 
@@ -49,30 +52,10 @@ Slack, Discord, Telegram, Pushover, SMTP, Google Chat, Teams, Gotify, and custom
 
 ## Run continuously
 
-Create `/etc/systemd/system/fetchdiff.service` and replace `YOUR_USER` with your Linux username:
-
-```ini
-[Unit]
-Description=FetchDiff URL monitor
-Wants=network-online.target
-After=network-online.target
-
-[Service]
-Type=simple
-User=YOUR_USER
-Environment=FETCHDIFF_DATA_DIR=/home/YOUR_USER/.fetchdiff
-ExecStart=/usr/local/bin/fetchdiff watch
-Restart=on-failure
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Enable it:
+Install the systemd service for your current user, then enable it:
 
 ```sh
-sudo systemctl daemon-reload
+sudo fetchdiff service install --user "$(id -un)"
 sudo systemctl enable --now fetchdiff
 ```
 
