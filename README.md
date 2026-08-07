@@ -84,6 +84,7 @@ fetchdiff doctor
 - `--every 24h` sets its interval; durations include `30m`, `6h`, and `24h`.
 - `--header "Name: value"` stores a repeatable request header with the target.
 - `check --force` checks every target now; `check NAME --force` checks one target now.
+- `remove NAME` deletes a target, its history, and its queued notifications.
 - `history NAME --limit 50` controls displayed history; zero shows everything.
 - `--timeout 30s`, `--max-retries 3`, and `--max-redirects 10` control HTTP behavior.
 - `--user-agent "MyMonitor/1.0"` changes the User-Agent for the current process.
