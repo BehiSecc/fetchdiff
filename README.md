@@ -19,6 +19,8 @@ fetchdiff add https://cdn.example.com/app.js \
   --every 24h
 ```
 
+Intervals support minutes, hours, days, weeks, and combinations: `30m`, `24h`, `7d`, `2w`, or `1w2d`.
+
 ## Notifications
 
 The first FetchDiff command creates a commented template at:
@@ -82,7 +84,7 @@ fetchdiff doctor
 ## Useful flags
 
 - `--name production-js` sets a target's unique name.
-- `--every 24h` sets its interval; durations include `30m`, `6h`, `7d`, `2w`, and combinations such as `1w2d`.
+- `--every DURATION` sets the check interval.
 - `--header "Name: value"` stores a repeatable request header with the target.
 - `check --force` checks every target now; `check NAME --force` checks one target now.
 - `remove NAME` deletes a target, its history, and its queued notifications.
