@@ -158,6 +158,31 @@ func TestForceCheckAllAndRemoveTarget(t *testing.T) {
 	}
 }
 
+func TestAddSupportsWeekIntervals(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		_, _ = io.WriteString(w, `const interval = "two-weeks";`)
+	}))
+	defer server.Close()
+	dataDir := filepath.Join(t.TempDir(), "state")
+
+	var output bytes.Buffer
+	command := newRootCommand(&output, &output)
+	command.SetArgs([]string{"--data-dir", dataDir, "add", server.URL + "/app.js", "--name", "fortnightly", "--every", "2w"})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("add with week interval: %v\n%s", err, output.String())
+	}
+	output.Reset()
+	command = newRootCommand(&output, &output)
+	command.SetArgs([]string{"--data-dir", dataDir, "show", "fortnightly"})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("show fortnightly: %v\n%s", err, output.String())
+	}
+	if !strings.Contains(output.String(), "Interval:") || !strings.Contains(output.String(), "2w") {
+		t.Fatalf("show output:\n%s", output.String())
+	}
+}
+
 func TestNotifyTestUsesConfiguredCustomWebhook(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {

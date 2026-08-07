@@ -196,11 +196,44 @@ func shortResourceType(resourceType string) string {
 }
 
 func compactDuration(value time.Duration) string {
+	const day = 24 * time.Hour
+	const week = 7 * day
+	if value > day {
+		remaining := value
+		var result strings.Builder
+		if weeks := remaining / week; weeks > 0 {
+			fmt.Fprintf(&result, "%dw", weeks)
+			remaining %= week
+		}
+		if days := remaining / day; days > 0 {
+			fmt.Fprintf(&result, "%dd", days)
+			remaining %= day
+		}
+		if remaining > 0 {
+			result.WriteString(compactSubday(remaining))
+		}
+		return result.String()
+	}
 	if value > 0 && value%time.Hour == 0 {
 		return fmt.Sprintf("%dh", int64(value/time.Hour))
 	}
 	if value > 0 && value%time.Minute == 0 {
 		return fmt.Sprintf("%dm", int64(value/time.Minute))
+	}
+	return value.String()
+}
+
+func compactSubday(value time.Duration) string {
+	if value >= time.Hour {
+		hours := value / time.Hour
+		remaining := value % time.Hour
+		if remaining == 0 {
+			return fmt.Sprintf("%dh", hours)
+		}
+		return fmt.Sprintf("%dh%s", hours, compactSubday(remaining))
+	}
+	if value > 0 && value%time.Minute == 0 {
+		return fmt.Sprintf("%dm", value/time.Minute)
 	}
 	return value.String()
 }

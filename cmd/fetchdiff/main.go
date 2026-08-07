@@ -209,13 +209,17 @@ func (r *runtime) drain(ctx context.Context) notifier.DispatchReport {
 
 func (c *cli) addCommand() *cobra.Command {
 	var name string
-	var every time.Duration
+	var every string
 	var rawHeaders []string
 	command := &cobra.Command{
 		Use:   "add URL",
 		Short: "Fetch a URL and save its initial baseline",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			interval, err := parseInterval(every)
+			if err != nil {
+				return err
+			}
 			headers, err := parseHeaders(rawHeaders)
 			if err != nil {
 				return err
@@ -224,7 +228,7 @@ func (c *cli) addCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			target, err := runtime.service.Add(cmd.Context(), app.AddInput{Name: name, URL: args[0], Every: every, Headers: headers})
+			target, err := runtime.service.Add(cmd.Context(), app.AddInput{Name: name, URL: args[0], Every: interval, Headers: headers})
 			if err != nil {
 				return err
 			}
@@ -233,7 +237,7 @@ func (c *cli) addCommand() *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&name, "name", "", "unique target name")
-	command.Flags().DurationVar(&every, "every", 24*time.Hour, "check interval")
+	command.Flags().StringVar(&every, "every", "24h", "check interval (for example 30m, 24h, 7d, or 2w)")
 	command.Flags().StringArrayVar(&rawHeaders, "header", nil, "request header in 'Name: value' form (repeatable)")
 	_ = command.MarkFlagRequired("name")
 	return command

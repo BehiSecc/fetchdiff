@@ -82,7 +82,7 @@ fetchdiff doctor
 ## Useful flags
 
 - `--name production-js` sets a target's unique name.
-- `--every 24h` sets its interval; durations include `30m`, `6h`, and `24h`.
+- `--every 24h` sets its interval; durations include `30m`, `6h`, `7d`, `2w`, and combinations such as `1w2d`.
 - `--header "Name: value"` stores a repeatable request header with the target.
 - `check --force` checks every target now; `check NAME --force` checks one target now.
 - `remove NAME` deletes a target, its history, and its queued notifications.
