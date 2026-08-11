@@ -218,7 +218,7 @@ func TestNotifyTestUsesConfiguredCustomWebhook(t *testing.T) {
 	}
 }
 
-func TestChangedCheckDeliversFullDiff(t *testing.T) {
+func TestChangedCheckDeliversDiscordHTMLReport(t *testing.T) {
 	var fetches atomic.Int32
 	resource := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/javascript")
@@ -229,10 +229,30 @@ func TestChangedCheckDeliversFullDiff(t *testing.T) {
 		_, _ = io.WriteString(w, `function value(){return 2}`)
 	}))
 	defer resource.Close()
-	var delivered string
+	var delivered, attachment string
 	webhook := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
-		content, _ := io.ReadAll(request.Body)
-		delivered += string(content)
+		reader, err := request.MultipartReader()
+		if err != nil {
+			t.Errorf("multipart reader: %v", err)
+			return
+		}
+		for {
+			part, err := reader.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Errorf("next part: %v", err)
+				return
+			}
+			content, _ := io.ReadAll(part)
+			if part.FormName() == "payload_json" {
+				delivered = string(content)
+			}
+			if part.FormName() == "files[0]" {
+				attachment = string(content)
+			}
+		}
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer webhook.Close()
@@ -245,7 +265,7 @@ func TestChangedCheckDeliversFullDiff(t *testing.T) {
 	if err := config.EnsurePaths(paths); err != nil {
 		t.Fatal(err)
 	}
-	providerConfig := "custom:\n  - id: webhook\n    custom_webhook_url: " + webhook.URL + "\n    custom_method: POST\n    custom_format: '{{data}}'\n"
+	providerConfig := "discord:\n  - id: webhook\n    discord_webhook_url: " + webhook.URL + "\n    discord_format: '{{data}}'\n"
 	if err := os.WriteFile(paths.Providers, []byte(providerConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +284,10 @@ func TestChangedCheckDeliversFullDiff(t *testing.T) {
 	if !strings.Contains(output, "Notifications sent: 1") {
 		t.Fatalf("check output:\n%s", output)
 	}
-	if !strings.Contains(delivered, "return 2") || !strings.Contains(delivered, "@@") {
-		t.Fatalf("delivered notification does not contain full diff:\n%s", delivered)
+	if strings.Contains(delivered, "return 2") || strings.Contains(delivered, "@@") || !strings.Contains(delivered, "Report: fetchdiff-app-") {
+		t.Fatalf("delivered notification is not the concise report summary:\n%s", delivered)
+	}
+	if !strings.Contains(attachment, "return 2") || !strings.Contains(attachment, "Full changes") || !strings.Contains(attachment, "<!doctype html>") {
+		t.Fatalf("Discord attachment does not contain the HTML diff report")
 	}
 }

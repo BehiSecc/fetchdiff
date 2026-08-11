@@ -17,6 +17,7 @@ import (
 	"github.com/BehiSecc/fetchdiff/internal/extract"
 	"github.com/BehiSecc/fetchdiff/internal/fetch"
 	"github.com/BehiSecc/fetchdiff/internal/model"
+	"github.com/BehiSecc/fetchdiff/internal/report"
 	"github.com/BehiSecc/fetchdiff/internal/schedule"
 	"github.com/BehiSecc/fetchdiff/internal/store"
 )
@@ -364,7 +365,14 @@ func (s *Service) successNotifications(previous, target model.Target, entry mode
 		if err != nil {
 			return nil, err
 		}
-		return s.notification(model.OutcomeChanged, target, changeMessage(previous, target, entry, diff), entry.CheckedAt), nil
+		htmlReport, err := report.RenderChange(report.Change{Previous: previous, Current: target, History: entry, Diff: diff})
+		if err != nil {
+			return nil, err
+		}
+		attachment := &model.Attachment{
+			Name: report.Filename(target, entry.CheckedAt), ContentType: "text/html; charset=utf-8", Data: htmlReport,
+		}
+		return s.notificationWithAttachment(model.OutcomeChanged, target, changeMessage(previous, target, entry, diff), entry.CheckedAt, attachment), nil
 	}
 	if entry.Recovered {
 		return s.notification(model.OutcomeRecovery, target, recoveryMessage(target, entry), entry.CheckedAt), nil
@@ -376,6 +384,10 @@ func (s *Service) successNotifications(previous, target model.Target, entry mode
 }
 
 func (s *Service) notification(kind string, target model.Target, text string, createdAt time.Time) []model.Notification {
+	return s.notificationWithAttachment(kind, target, text, createdAt, nil)
+}
+
+func (s *Service) notificationWithAttachment(kind string, target model.Target, text string, createdAt time.Time, attachment *model.Attachment) []model.Notification {
 	if len(s.notificationDestinations) == 0 {
 		return nil
 	}
@@ -386,6 +398,7 @@ func (s *Service) notification(kind string, target model.Target, text string, cr
 	return []model.Notification{{
 		ID: newID(), Kind: kind, TargetID: target.ID, TargetName: target.Name,
 		CreatedAt: createdAt, Text: text,
+		Attachment: attachment,
 		Data: map[string]string{
 			"url": target.URL, "name": target.Name, "type": target.ResourceType,
 			"hash": target.SnapshotHash, "status": fmt.Sprintf("%d", target.StatusCode),
@@ -412,11 +425,7 @@ func changeMessage(previous, target model.Target, entry model.HistoryEntry, diff
 		fmt.Fprintln(&output, "Recovery: target is healthy again")
 	}
 	fmt.Fprintf(&output, "Checked: %s\n", displayTime(entry.CheckedAt))
-	if diff.FormatNote != "" {
-		fmt.Fprintf(&output, "Note: %s\n", diff.FormatNote)
-	}
-	fmt.Fprintln(&output)
-	output.WriteString(diff.Text)
+	fmt.Fprintf(&output, "Report: %s\n", report.Filename(target, entry.CheckedAt))
 	return output.String()
 }
 

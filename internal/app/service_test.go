@@ -291,7 +291,7 @@ func TestOverlappingChecksCannotRollBackState(t *testing.T) {
 	}
 }
 
-func TestChangedCheckQueuesFullNotificationAtomically(t *testing.T) {
+func TestChangedCheckQueuesHTMLReportAtomically(t *testing.T) {
 	fake := &fakeFetcher{steps: []fetchStep{
 		{response: baselineResponse(`function value(){return 1}`)},
 		{response: baselineResponse(`function value(){return 2}`)},
@@ -313,8 +313,15 @@ func TestChangedCheckQueuesFullNotificationAtomically(t *testing.T) {
 	if len(notifications) != 1 {
 		t.Fatalf("notifications = %#v", notifications)
 	}
-	if !strings.Contains(notifications[0].Text, "return 2") || !strings.Contains(notifications[0].Text, "@@") {
-		t.Fatalf("notification does not contain the full diff:\n%s", notifications[0].Text)
+	if strings.Contains(notifications[0].Text, "return 2") || strings.Contains(notifications[0].Text, "@@") {
+		t.Fatalf("notification text unexpectedly contains the raw diff:\n%s", notifications[0].Text)
+	}
+	attachment := notifications[0].Attachment
+	if attachment == nil || attachment.ContentType != "text/html; charset=utf-8" || !strings.HasSuffix(attachment.Name, ".html") {
+		t.Fatalf("attachment = %#v", attachment)
+	}
+	if !strings.Contains(string(attachment.Data), "return 2") || !strings.Contains(string(attachment.Data), "Full changes") {
+		t.Fatalf("HTML report does not contain the full change")
 	}
 	if _, ok := notifications[0].Deliveries["custom:webhook"]; !ok {
 		t.Fatalf("deliveries = %#v", notifications[0].Deliveries)

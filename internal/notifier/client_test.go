@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/projectdiscovery/notify/pkg/providers/custom"
+	"github.com/projectdiscovery/notify/pkg/providers/discord"
 )
 
 func TestLoadCommentedTemplateIsDisabled(t *testing.T) {
@@ -25,6 +26,55 @@ func TestLoadCommentedTemplateIsDisabled(t *testing.T) {
 	}
 	if client.Count() != 0 {
 		t.Fatalf("destinations = %v", client.Keys())
+	}
+}
+
+func TestDiscordAttachmentDelivery(t *testing.T) {
+	var payload, filename, fileContent string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if !strings.Contains(request.URL.RawQuery, "wait=true") {
+			t.Errorf("query = %q", request.URL.RawQuery)
+		}
+		reader, err := request.MultipartReader()
+		if err != nil {
+			t.Errorf("multipart reader: %v", err)
+			return
+		}
+		for {
+			part, err := reader.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Errorf("next part: %v", err)
+				return
+			}
+			content, _ := io.ReadAll(part)
+			switch part.FormName() {
+			case "payload_json":
+				payload = string(content)
+			case "files[0]":
+				filename, fileContent = part.FileName(), string(content)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+	client, err := New(Config{Discord: []*discord.Options{{ID: "alerts", DiscordWebHookURL: server.URL, DiscordWebHookUsername: "FetchDiff"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = client.Send(context.Background(), "discord:alerts", Message{Text: "changed", Attachment: &Attachment{Name: "report.html", ContentType: "text/html", Data: []byte("<html>full diff</html>")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(payload, `"content":"changed"`) || !strings.Contains(payload, `"parse":[]`) {
+		t.Fatalf("payload = %s", payload)
+	}
+	if filename != "report.html" || fileContent != "<html>full diff</html>" {
+		t.Fatalf("file = %q %q", filename, fileContent)
 	}
 }
 

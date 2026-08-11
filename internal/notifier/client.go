@@ -29,6 +29,10 @@ type providerSender interface {
 	Send(message, cliFormat string) error
 }
 
+type attachmentSender interface {
+	SendAttachment(context.Context, string, Attachment) error
+}
+
 type Config struct {
 	Slack      []*slack.Options      `yaml:"slack,omitempty"`
 	Discord    []*discord.Options    `yaml:"discord,omitempty"`
@@ -42,8 +46,15 @@ type Config struct {
 }
 
 type Message struct {
-	Text string            `json:"text"`
-	Data map[string]string `json:"data,omitempty"`
+	Text       string            `json:"text"`
+	Data       map[string]string `json:"data,omitempty"`
+	Attachment *Attachment       `json:"attachment,omitempty"`
+}
+
+type Attachment struct {
+	Name        string
+	ContentType string
+	Data        []byte
 }
 
 type Filter struct {
@@ -59,12 +70,13 @@ type Result struct {
 }
 
 type destination struct {
-	key      string
-	provider string
-	id       string
-	sender   providerSender
-	sprig    bool
-	secrets  []string
+	key        string
+	provider   string
+	id         string
+	sender     providerSender
+	attachment attachmentSender
+	sprig      bool
+	secrets    []string
 }
 
 type Client struct {
@@ -128,12 +140,17 @@ func New(config Config) (*Client, error) {
 			errs = append(errs, err)
 			continue
 		}
+		if option.DiscordThreads && strings.TrimSpace(option.DiscordThreadID) == "" {
+			errs = append(errs, fmt.Errorf("discord:%s requires discord_thread_id when discord_threads is enabled", option.ID))
+			continue
+		}
 		sender, err := discord.New([]*discord.Options{option}, nil)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("discord:%s: %w", option.ID, err))
 			continue
 		}
 		client.add("discord", option.ID, sender, false, webhookSecrets(option.DiscordWebHookURL)...)
+		client.setAttachmentSender("discord", option.ID, newDiscordAttachmentSender(option))
 	}
 
 	for _, option := range config.Telegram {
@@ -348,10 +365,23 @@ func (c *Client) Send(ctx context.Context, key string, message Message) error {
 		}
 		payload = string(encoded)
 	}
+	if message.Attachment != nil && destination.attachment != nil {
+		if err := destination.attachment.SendAttachment(ctx, payload, *message.Attachment); err != nil {
+			return errors.New(redact(err.Error(), destination.secrets))
+		}
+		return nil
+	}
 	if err := destination.sender.Send(payload, ""); err != nil {
 		return errors.New(redact(err.Error(), destination.secrets))
 	}
 	return nil
+}
+
+func (c *Client) setAttachmentSender(provider, id string, sender attachmentSender) {
+	key := provider + ":" + id
+	destination := c.destinations[key]
+	destination.attachment = sender
+	c.destinations[key] = destination
 }
 
 func (c *Client) SendAll(ctx context.Context, message Message, filter Filter) []Result {

@@ -47,7 +47,7 @@ Test a specific destination when needed:
 fetchdiff notify-test --provider discord --id crawl
 ```
 
-Slack, Discord, Telegram, Pushover, SMTP, Google Chat, Teams, Gotify, and custom webhooks are supported. FetchDiff sends change, third-failure, recovery, status, and redirect alerts. Failed deliveries stay queued and retry without fetching the target again.
+Slack, Discord, Telegram, Pushover, SMTP, Google Chat, Teams, Gotify, and custom webhooks are supported. Change alerts include a self-contained HTML diff attachment on Discord; other providers receive the concise summary. Failed deliveries stay queued and retry without fetching the target again.
 
 ## Run continuously
 

@@ -78,6 +78,9 @@ func (d *Dispatcher) releaseEvents(events []model.Notification, report *Dispatch
 
 func (d *Dispatcher) drainEvent(ctx context.Context, event model.Notification, report *DispatchReport) {
 	chunks := SplitMessage(event.Text, ChunkLimit)
+	if event.Attachment != nil {
+		chunks = []string{event.Text}
+	}
 	keys := make([]string, 0, len(event.Deliveries))
 	for key := range event.Deliveries {
 		keys = append(keys, key)
@@ -106,7 +109,11 @@ func (d *Dispatcher) drainEvent(ctx context.Context, event model.Notification, r
 			data["event"] = event.Kind
 			data["target"] = event.TargetName
 			data["chunk"] = fmt.Sprintf("%d", state.NextChunk+1)
-			if err := d.client.Send(ctx, key, Message{Text: chunks[state.NextChunk], Data: data}); err != nil {
+			message := Message{Text: chunks[state.NextChunk], Data: data}
+			if event.Attachment != nil {
+				message.Attachment = &Attachment{Name: event.Attachment.Name, ContentType: event.Attachment.ContentType, Data: event.Attachment.Data}
+			}
+			if err := d.client.Send(ctx, key, message); err != nil {
 				d.fail(event.ID, key, &state, err, report)
 				failed = true
 				break

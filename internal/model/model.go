@@ -67,9 +67,16 @@ type Notification struct {
 	CreatedAt  time.Time                `json:"created_at"`
 	Text       string                   `json:"text"`
 	Data       map[string]string        `json:"data,omitempty"`
+	Attachment *Attachment              `json:"attachment,omitempty"`
 	Deliveries map[string]DeliveryState `json:"deliveries"`
 	LeaseOwner string                   `json:"lease_owner,omitempty"`
 	LeaseUntil time.Time                `json:"lease_until,omitempty"`
+}
+
+type Attachment struct {
+	Name        string `json:"name"`
+	ContentType string `json:"content_type"`
+	Data        []byte `json:"data"`
 }
 
 type DeliveryState struct {
