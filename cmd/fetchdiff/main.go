@@ -564,6 +564,10 @@ func (c *cli) notifyTestCommand() *cobra.Command {
 			message := notifier.Message{
 				Text: fmt.Sprintf("✅ FetchDiff notification test\n\nProvider delivery is working.\nChecked: %s", formatTime(time.Now().UTC())),
 				Data: map[string]string{"event": "test", "name": "notification-test", "checked": time.Now().UTC().Format(time.RFC3339)},
+				Attachment: &notifier.Attachment{
+					Name: "fetchdiff-notification-test.html", ContentType: "text/html; charset=utf-8",
+					Data: []byte(`<!doctype html><meta charset="utf-8"><title>FetchDiff notification test</title><h1>FetchDiff</h1><p>HTML report attachments are working.</p>`),
+				},
 			}
 			results := runtime.notifications.SendAll(cmd.Context(), message, filter)
 			var failures []error

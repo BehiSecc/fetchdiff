@@ -90,6 +90,7 @@ const providersTemplate = `# FetchDiff notification providers.
 #     slack_username: "FetchDiff"
 #     slack_format: "{{data}}"
 #     slack_webhook_url: ""
+#     slack_token: "" # Optional: bot token with files:write for HTML attachments.
 
 # discord:
 #   - id: "discord"
@@ -150,6 +151,7 @@ const providersTemplate = `# FetchDiff notification providers.
 #     custom_webhook_url: ""
 #     custom_method: POST
 #     custom_format: '{"text":{{dataJsonString}}}'
+#     custom_multipart: false # Set true to send changes as data + file fields.
 #     custom_headers:
 #       Content-Type: application/json
 `

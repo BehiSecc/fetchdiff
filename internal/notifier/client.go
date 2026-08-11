@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/mail"
 	"net/url"
 	"os"
 	"sort"
@@ -42,7 +43,12 @@ type Config struct {
 	GoogleChat []*googlechat.Options `yaml:"googlechat,omitempty"`
 	Teams      []*teams.Options      `yaml:"teams,omitempty"`
 	Gotify     []*gotify.Options     `yaml:"gotify,omitempty"`
-	Custom     []*custom.Options     `yaml:"custom,omitempty"`
+	Custom     []*CustomOptions      `yaml:"custom,omitempty"`
+}
+
+type CustomOptions struct {
+	custom.Options  `yaml:",inline"`
+	CustomMultipart bool `yaml:"custom_multipart,omitempty"`
 }
 
 type Message struct {
@@ -125,6 +131,9 @@ func New(config Config) (*Client, error) {
 		}
 		secrets := append(webhookSecrets(option.SlackWebHookURL), option.SlackToken)
 		client.add("slack", option.ID, sender, false, secrets...)
+		if option.SlackToken != "" && option.SlackChannel != "" {
+			client.setAttachmentSender("slack", option.ID, newSlackAttachmentSender(option))
+		}
 	}
 
 	for _, option := range config.Discord {
@@ -166,12 +175,25 @@ func New(config Config) (*Client, error) {
 			errs = append(errs, fmt.Errorf("telegram:%s requires telegram_api_key and telegram_chat_id", option.ID))
 			continue
 		}
+		parseMode := strings.ToLower(strings.TrimSpace(option.TelegramParseMode))
+		if parseMode != "" && parseMode != "none" && parseMode != "markdown" && parseMode != "markdownv2" && parseMode != "html" {
+			errs = append(errs, fmt.Errorf("telegram:%s has an invalid telegram_parsemode", option.ID))
+			continue
+		}
+		if strings.Contains(option.TelegramChatID, ":") {
+			chatID, topicID := telegramDestination(option.TelegramChatID)
+			if topicID == "" || chatID == option.TelegramChatID {
+				errs = append(errs, fmt.Errorf("telegram:%s has an invalid topic id in telegram_chat_id", option.ID))
+				continue
+			}
+		}
 		sender, err := telegram.New([]*telegram.Options{option}, nil)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("telegram:%s: %w", option.ID, err))
 			continue
 		}
 		client.add("telegram", option.ID, sender, false, option.TelegramAPIKey, option.TelegramChatID)
+		client.setAttachmentSender("telegram", option.ID, newTelegramAttachmentSender(option))
 	}
 
 	for _, option := range config.Pushover {
@@ -208,12 +230,32 @@ func New(config Config) (*Client, error) {
 			errs = append(errs, fmt.Errorf("smtp:%s requires smtp_server, from_address, and at least one smtp_cc recipient", option.ID))
 			continue
 		}
+		if _, _, err := smtpServerAddress(option.Server); err != nil {
+			errs = append(errs, fmt.Errorf("smtp:%s: %w", option.ID, err))
+			continue
+		}
+		if _, err := mail.ParseAddress(option.FromAddress); err != nil {
+			errs = append(errs, fmt.Errorf("smtp:%s has an invalid from_address", option.ID))
+			continue
+		}
+		validRecipients := true
+		for _, recipient := range option.SMTPCC {
+			if _, err := mail.ParseAddress(recipient); err != nil {
+				validRecipients = false
+				break
+			}
+		}
+		if !validRecipients {
+			errs = append(errs, fmt.Errorf("smtp:%s has an invalid smtp_cc recipient", option.ID))
+			continue
+		}
 		sender, err := smtp.New([]*smtp.Options{option}, nil)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("smtp:%s: %w", option.ID, err))
 			continue
 		}
 		client.add("smtp", option.ID, sender, false, option.Username, option.Password, url.QueryEscape(option.Password))
+		client.setAttachmentSender("smtp", option.ID, newSMTPAttachmentSender(option))
 	}
 
 	for _, option := range config.GoogleChat {
@@ -280,11 +322,12 @@ func New(config Config) (*Client, error) {
 		client.add("gotify", option.ID, sender, false, option.GotifyToken)
 	}
 
-	for _, option := range config.Custom {
-		if option == nil {
+	for _, configured := range config.Custom {
+		if configured == nil {
 			errs = append(errs, errors.New("custom contains an empty entry"))
 			continue
 		}
+		option := &configured.Options
 		if err := client.requireID("custom", option.ID); err != nil {
 			errs = append(errs, err)
 			continue
@@ -307,6 +350,14 @@ func New(config Config) (*Client, error) {
 			secrets = append(secrets, value)
 		}
 		client.add("custom", option.ID, sender, option.CustomSprig != "", secrets...)
+		if configured.CustomMultipart {
+			method := strings.ToUpper(option.CustomMethod)
+			if method != http.MethodPost && method != http.MethodPut && method != http.MethodPatch {
+				errs = append(errs, fmt.Errorf("custom:%s custom_multipart requires POST, PUT, or PATCH", option.ID))
+				continue
+			}
+			client.setAttachmentSender("custom", option.ID, newCustomAttachmentSender(sender))
+		}
 	}
 
 	if len(errs) > 0 {
@@ -325,6 +376,11 @@ func (c *Client) Count() int { return len(c.keys) }
 func (c *Client) Has(key string) bool {
 	_, ok := c.destinations[key]
 	return ok
+}
+
+func (c *Client) SupportsAttachment(key string) bool {
+	destination, ok := c.destinations[key]
+	return ok && destination.attachment != nil
 }
 
 func (c *Client) Select(filter Filter) []string {

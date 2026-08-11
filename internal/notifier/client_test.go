@@ -88,9 +88,9 @@ func TestCustomWebhookDeliveryAndFilter(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
-	client, err := New(Config{Custom: []*custom.Options{{
+	client, err := New(Config{Custom: []*CustomOptions{{Options: custom.Options{
 		ID: "webhook", CustomWebhookURL: server.URL, CustomMethod: http.MethodPost, CustomFormat: `{"text":{{dataJsonString}}}`,
-	}}})
+	}}}})
 	if err != nil {
 		t.Fatal(err)
 	}

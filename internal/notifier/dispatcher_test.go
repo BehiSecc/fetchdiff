@@ -57,9 +57,9 @@ func TestDispatcherRetriesWithoutDroppingEvent(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
-	client, err := New(Config{Custom: []*custom.Options{{
+	client, err := New(Config{Custom: []*CustomOptions{{Options: custom.Options{
 		ID: "webhook", CustomWebhookURL: server.URL, CustomMethod: http.MethodPost, CustomFormat: "{{data}}",
-	}}})
+	}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,9 +134,9 @@ func TestDispatcherResumesAtFailedChunk(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer server.Close()
-	client, err := New(Config{Custom: []*custom.Options{{
+	client, err := New(Config{Custom: []*CustomOptions{{Options: custom.Options{
 		ID: "webhook", CustomWebhookURL: server.URL, CustomMethod: http.MethodPost, CustomFormat: "{{data}}",
-	}}})
+	}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,9 +186,9 @@ func TestDispatcherKeepsOnlyFailedDestinationPending(t *testing.T) {
 	defer good.Close()
 	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { http.Error(w, "later", http.StatusServiceUnavailable) }))
 	defer bad.Close()
-	client, err := New(Config{Custom: []*custom.Options{
-		{ID: "good", CustomWebhookURL: good.URL, CustomMethod: http.MethodPost, CustomFormat: "{{data}}"},
-		{ID: "bad", CustomWebhookURL: bad.URL, CustomMethod: http.MethodPost, CustomFormat: "{{data}}"},
+	client, err := New(Config{Custom: []*CustomOptions{
+		{Options: custom.Options{ID: "good", CustomWebhookURL: good.URL, CustomMethod: http.MethodPost, CustomFormat: "{{data}}"}},
+		{Options: custom.Options{ID: "bad", CustomWebhookURL: bad.URL, CustomMethod: http.MethodPost, CustomFormat: "{{data}}"}},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -222,5 +222,66 @@ func TestDispatcherKeepsOnlyFailedDestinationPending(t *testing.T) {
 	}
 	if _, ok := pending[0].Deliveries["custom:bad"]; !ok {
 		t.Fatalf("wrong destination remained: %#v", pending[0].Deliveries)
+	}
+}
+
+func TestDispatcherAttachesOnlyForCapableDestinations(t *testing.T) {
+	var multipartRequests, summaryRequests atomic.Int32
+	attached := atomic.Bool{}
+	upload := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		multipartRequests.Add(1)
+		reader, err := request.MultipartReader()
+		if err != nil {
+			t.Errorf("multipart: %v", err)
+			return
+		}
+		for {
+			part, err := reader.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Errorf("part: %v", err)
+				return
+			}
+			if part.FormName() == "file" {
+				attached.Store(true)
+			}
+			_, _ = io.Copy(io.Discard, part)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer upload.Close()
+	summary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		summaryRequests.Add(1)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer summary.Close()
+	client, err := New(Config{Custom: []*CustomOptions{
+		{Options: custom.Options{ID: "upload", CustomWebhookURL: upload.URL, CustomMethod: http.MethodPost, CustomFormat: "{{data}}"}, CustomMultipart: true},
+		{Options: custom.Options{ID: "summary", CustomWebhookURL: summary.URL, CustomMethod: http.MethodPost, CustomFormat: "{{data}}"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := dispatcherStore(t)
+	now := time.Now().UTC()
+	target := model.Target{ID: "target-1", Revision: 1, Name: "app", URL: "https://example.com/app.js"}
+	if err := state.CreateTarget(target, model.HistoryEntry{TargetID: target.ID, CheckedAt: now, Outcome: model.OutcomeBaseline}); err != nil {
+		t.Fatal(err)
+	}
+	target.Revision++
+	event := model.Notification{ID: "event-1", CreatedAt: now, Text: strings.Repeat("changed ", 300), Attachment: &model.Attachment{Name: "report.html", ContentType: "text/html", Data: []byte("report")}, Deliveries: map[string]model.DeliveryState{"custom:upload": {}, "custom:summary": {}}}
+	if err := state.CommitTarget(target, 1, nil, []model.Notification{event}); err != nil {
+		t.Fatal(err)
+	}
+	dispatcher := NewDispatcher(client, state)
+	dispatcher.now = func() time.Time { return now }
+	report := dispatcher.Drain(context.Background())
+	if report.Err() != nil {
+		t.Fatal(report.Err())
+	}
+	if multipartRequests.Load() != 1 || !attached.Load() || summaryRequests.Load() < 2 {
+		t.Fatalf("multipart=%d attached=%v summary=%d", multipartRequests.Load(), attached.Load(), summaryRequests.Load())
 	}
 }

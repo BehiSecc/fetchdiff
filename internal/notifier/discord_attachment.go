@@ -8,7 +8,6 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
-	"net/textproto"
 	"net/url"
 	"strings"
 	"time"
@@ -73,14 +72,7 @@ func (s *discordAttachmentSender) SendAttachment(ctx context.Context, message st
 	if _, err := field.Write(encoded); err != nil {
 		return fmt.Errorf("write Discord payload: %w", err)
 	}
-	header := make(textproto.MIMEHeader)
-	header.Set("Content-Disposition", fmt.Sprintf(`form-data; name="files[0]"; filename=%q`, safeAttachmentName(attachment.Name)))
-	contentType := attachment.ContentType
-	if contentType == "" {
-		contentType = "application/octet-stream"
-	}
-	header.Set("Content-Type", contentType)
-	file, err := writer.CreatePart(header)
+	file, err := createAttachmentPart(writer, "files[0]", attachment)
 	if err != nil {
 		return fmt.Errorf("create Discord attachment: %w", err)
 	}

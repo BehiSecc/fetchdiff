@@ -77,10 +77,7 @@ func (d *Dispatcher) releaseEvents(events []model.Notification, report *Dispatch
 }
 
 func (d *Dispatcher) drainEvent(ctx context.Context, event model.Notification, report *DispatchReport) {
-	chunks := SplitMessage(event.Text, ChunkLimit)
-	if event.Attachment != nil {
-		chunks = []string{event.Text}
-	}
+	textChunks := SplitMessage(event.Text, ChunkLimit)
 	keys := make([]string, 0, len(event.Deliveries))
 	for key := range event.Deliveries {
 		keys = append(keys, key)
@@ -94,6 +91,11 @@ func (d *Dispatcher) drainEvent(ctx context.Context, event model.Notification, r
 		if !d.client.Has(key) {
 			d.fail(event.ID, key, &state, fmt.Errorf("notification destination %q is no longer configured", key), report)
 			continue
+		}
+		chunks := textChunks
+		attach := event.Attachment != nil && d.client.SupportsAttachment(key)
+		if attach {
+			chunks = []string{event.Text}
 		}
 		failed := false
 		for state.NextChunk < len(chunks) {
@@ -110,7 +112,7 @@ func (d *Dispatcher) drainEvent(ctx context.Context, event model.Notification, r
 			data["target"] = event.TargetName
 			data["chunk"] = fmt.Sprintf("%d", state.NextChunk+1)
 			message := Message{Text: chunks[state.NextChunk], Data: data}
-			if event.Attachment != nil {
+			if attach {
 				message.Attachment = &Attachment{Name: event.Attachment.Name, ContentType: event.Attachment.ContentType, Data: event.Attachment.Data}
 			}
 			if err := d.client.Send(ctx, key, message); err != nil {
