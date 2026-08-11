@@ -2,6 +2,8 @@
 
 FetchDiff monitors remote JavaScript and web pages for changes. It keeps exact snapshots, checks URLs on a schedule, prints readable full diffs, and can notify Slack, Discord, Telegram, email, and other providers.
 
+![](image.png)
+
 ## Installation
 
 ```sh
