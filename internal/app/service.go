@@ -86,6 +86,20 @@ func (s *Service) History(name string) ([]model.HistoryEntry, error) {
 	return s.store.History(target.ID)
 }
 
+func (s *Service) Changes(name string) ([]model.HistoryEntry, error) {
+	history, err := s.History(name)
+	if err != nil {
+		return nil, err
+	}
+	changes := make([]model.HistoryEntry, 0)
+	for _, entry := range history {
+		if entry.Outcome == model.OutcomeChanged && entry.Hash != "" && entry.PreviousHash != "" && entry.Hash != entry.PreviousHash {
+			changes = append(changes, entry)
+		}
+	}
+	return changes, nil
+}
+
 func (s *Service) Remove(name string) (model.Target, error) {
 	return s.store.DeleteTarget(strings.TrimSpace(name))
 }
@@ -497,6 +511,10 @@ func displayTime(value time.Time) string {
 }
 
 func (s *Service) RevisionDiff(name string) (RevisionDiff, error) {
+	return s.RevisionDiffAt(name, "")
+}
+
+func (s *Service) RevisionDiffAt(name, changeID string) (RevisionDiff, error) {
 	target, err := s.store.Target(name)
 	if err != nil {
 		return RevisionDiff{}, err
@@ -505,22 +523,34 @@ func (s *Service) RevisionDiff(name string) (RevisionDiff, error) {
 	if err != nil {
 		return RevisionDiff{}, err
 	}
-	var current, previous model.HistoryEntry
+	changeID = strings.TrimSpace(changeID)
+	var matches []model.HistoryEntry
 	for _, entry := range history {
-		if entry.Hash == "" || (entry.Outcome != model.OutcomeBaseline && entry.Outcome != model.OutcomeChanged) {
+		if entry.Outcome != model.OutcomeChanged || entry.Hash == "" || entry.PreviousHash == "" || entry.Hash == entry.PreviousHash {
 			continue
 		}
-		if current.Hash == "" {
-			current = entry
-			continue
-		}
-		if entry.Hash != current.Hash {
-			previous = entry
+		if changeID == "" {
+			matches = append(matches, entry)
 			break
 		}
+		if strings.HasPrefix(strings.ToLower(entry.ID), strings.ToLower(changeID)) {
+			matches = append(matches, entry)
+		}
 	}
-	if current.Hash == "" || previous.Hash == "" {
-		return RevisionDiff{}, fmt.Errorf("target %q does not have two distinct snapshots yet", name)
+	if len(matches) == 0 {
+		if changeID == "" {
+			return RevisionDiff{}, fmt.Errorf("target %q does not have a recorded change yet", name)
+		}
+		return RevisionDiff{}, fmt.Errorf("change %q was not found for target %q", changeID, name)
+	}
+	if len(matches) > 1 {
+		return RevisionDiff{}, fmt.Errorf("change id %q is ambiguous; provide more characters", changeID)
+	}
+	current := matches[0]
+	previous := model.HistoryEntry{
+		TargetID: target.ID, CheckedAt: current.CheckedAt, Outcome: model.OutcomeChanged,
+		Hash: current.PreviousHash, Size: current.PreviousSize, StatusCode: current.PreviousStatusCode,
+		EffectiveURL: current.PreviousURL,
 	}
 	oldContent, err := s.store.Snapshot(previous.Hash)
 	if err != nil {
@@ -535,6 +565,16 @@ func (s *Service) RevisionDiff(name string) (RevisionDiff, error) {
 		return RevisionDiff{}, err
 	}
 	return RevisionDiff{Target: target, Current: current, Previous: previous, Diff: diff}, nil
+}
+
+func RenderRevisionReport(revision RevisionDiff) ([]byte, error) {
+	current := revision.Target
+	current.SnapshotHash, current.SnapshotSize = revision.Current.Hash, revision.Current.Size
+	current.StatusCode, current.EffectiveURL = revision.Current.StatusCode, revision.Current.EffectiveURL
+	previous := current
+	previous.SnapshotHash, previous.SnapshotSize = revision.Previous.Hash, revision.Previous.Size
+	previous.StatusCode, previous.EffectiveURL = revision.Previous.StatusCode, revision.Previous.EffectiveURL
+	return report.RenderChange(report.Change{Previous: previous, Current: current, History: revision.Current, Diff: revision.Diff})
 }
 
 func validateURL(raw string) error {

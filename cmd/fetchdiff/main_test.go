@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -108,10 +109,76 @@ func TestCommandWorkflow(t *testing.T) {
 	if output := run("check", "production-js", "--force"); !strings.Contains(output, "function value()") || !strings.Contains(output, "return 2") {
 		t.Fatalf("check output:\n%s", output)
 	}
-	for _, command := range [][]string{{"list"}, {"show", "production-js"}, {"history", "production-js"}, {"diff", "production-js"}, {"status"}, {"doctor"}} {
+	for _, command := range [][]string{{"list"}, {"show", "production-js"}, {"history", "production-js"}, {"changes", "production-js"}, {"diff", "production-js"}, {"status"}, {"doctor"}} {
 		if output := run(command...); strings.TrimSpace(output) == "" {
 			t.Fatalf("%s returned no output", strings.Join(command, " "))
 		}
+	}
+}
+
+func TestHistoricalChangeSelectionAndFileOutput(t *testing.T) {
+	var version atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		fmt.Fprintf(w, "const value = %d;", version.Add(1))
+	}))
+	defer server.Close()
+	dataDir := filepath.Join(t.TempDir(), "state")
+	run := func(args ...string) (string, error) {
+		var output bytes.Buffer
+		command := newRootCommand(&output, &output)
+		command.SetArgs(append([]string{"--data-dir", dataDir}, args...))
+		err := command.Execute()
+		return output.String(), err
+	}
+	for _, args := range [][]string{
+		{"add", server.URL + "/app.js", "--name", "app", "--every", "24h"},
+		{"check", "app", "--force"}, {"check", "app", "--force"},
+	} {
+		if output, err := run(args...); err != nil {
+			t.Fatalf("fetchdiff %s: %v\n%s", strings.Join(args, " "), err, output)
+		}
+	}
+	output, err := run("changes", "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(output), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("changes output:\n%s", output)
+	}
+	olderID := strings.Fields(lines[2])[0]
+	output, err = run("diff", "app", "--change", olderID)
+	if err != nil || !strings.Contains(output, "value = 1") || !strings.Contains(output, "value = 2") || strings.Contains(output, "value = 3") {
+		t.Fatalf("historical diff: %v\n%s", err, output)
+	}
+	plainPath := filepath.Join(t.TempDir(), "older.diff")
+	if output, err = run("diff", "app", "--change", olderID, "--output", plainPath); err != nil || !strings.Contains(output, "Diff written") {
+		t.Fatalf("plain output: %v\n%s", err, output)
+	}
+	plain, err := os.ReadFile(plainPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(plain), "value = 1") || !strings.Contains(string(plain), "value = 2") {
+		t.Fatalf("plain file:\n%s", plain)
+	}
+	htmlPath := filepath.Join(t.TempDir(), "older.html")
+	if output, err = run("diff", "app", "--change", olderID, "-o", htmlPath); err != nil || !strings.Contains(output, "Diff written") {
+		t.Fatalf("HTML output: %v\n%s", err, output)
+	}
+	html, err := os.ReadFile(htmlPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(html), "<!doctype html>") || !strings.Contains(string(html), "Full changes") {
+		t.Fatalf("HTML file is not a report")
+	}
+	if info, err := os.Stat(htmlPath); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("HTML mode: %v %v", info, err)
+	}
+	if _, err := run("diff", "app", "--change", olderID, "-o", htmlPath); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("existing output error = %v", err)
 	}
 }
 

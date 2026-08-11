@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	goruntime "runtime"
 	"strconv"
 	"strings"
@@ -83,6 +85,7 @@ func newRootCommand(out, errOut io.Writer) *cobra.Command {
 		c.listCommand(),
 		c.showCommand(),
 		c.historyCommand(),
+		c.changesCommand(),
 		c.diffCommand(),
 		c.statusCommand(),
 		c.doctorCommand(),
@@ -460,23 +463,77 @@ func (c *cli) historyCommand() *cobra.Command {
 }
 
 func (c *cli) diffCommand() *cobra.Command {
-	return &cobra.Command{
+	var changeID, outputPath string
+	command := &cobra.Command{
 		Use:   "diff NAME",
-		Short: "Show the full diff between the latest two snapshots",
+		Short: "Show a specific or latest recorded change",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			runtime, err := c.open()
 			if err != nil {
 				return err
 			}
-			revision, err := runtime.service.RevisionDiff(args[0])
+			revision, err := runtime.service.RevisionDiffAt(args[0], changeID)
 			if err != nil {
 				return err
 			}
-			printChange(c.out, revision)
+			if outputPath == "" {
+				printChange(c.out, revision)
+				return nil
+			}
+			var content []byte
+			if extension := strings.ToLower(filepath.Ext(outputPath)); extension == ".html" || extension == ".htm" {
+				content, err = app.RenderRevisionReport(revision)
+			} else {
+				var output bytes.Buffer
+				printChange(&output, revision)
+				content = output.Bytes()
+			}
+			if err != nil {
+				return err
+			}
+			if err := writeNewFile(outputPath, content); err != nil {
+				return err
+			}
+			fmt.Fprintf(c.out, "✓ Diff written to %s\n", outputPath)
 			return nil
 		},
 	}
+	command.Flags().StringVar(&changeID, "change", "", "change ID from fetchdiff changes (default latest)")
+	command.Flags().StringVarP(&outputPath, "output", "o", "", "write the diff to a file (.html creates a visual report)")
+	return command
+}
+
+func (c *cli) changesCommand() *cobra.Command {
+	var limit int
+	command := &cobra.Command{
+		Use: "changes NAME", Short: "List recorded content changes", Args: cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			runtime, err := c.open()
+			if err != nil {
+				return err
+			}
+			changes, err := runtime.service.Changes(args[0])
+			if err != nil {
+				return err
+			}
+			if limit > 0 && len(changes) > limit {
+				changes = changes[:limit]
+			}
+			if len(changes) == 0 {
+				fmt.Fprintf(c.out, "No changes recorded for %s.\n", args[0])
+				return nil
+			}
+			writer := tabwriter.NewWriter(c.out, 0, 4, 2, ' ', 0)
+			fmt.Fprintln(writer, "CHANGE ID\tCHECKED\tSIZE\tHASH")
+			for _, change := range changes {
+				fmt.Fprintf(writer, "%s\t%s\t%s → %s\t%s → %s\n", shortID(change.ID), formatTime(change.CheckedAt), formatBytes(change.PreviousSize), formatBytes(change.Size), shortHash(change.PreviousHash), shortHash(change.Hash))
+			}
+			return writer.Flush()
+		},
+	}
+	command.Flags().IntVar(&limit, "limit", 20, "maximum changes to show (0 shows everything)")
+	return command
 }
 
 func (c *cli) statusCommand() *cobra.Command {
@@ -678,6 +735,42 @@ func printChange(out io.Writer, revision app.RevisionDiff) {
 
 func printBaseline(out io.Writer, target model.Target) {
 	fmt.Fprintf(out, "✓ Baseline created\n\nTarget: %s\nType: %s\nStatus: %d\nSize: %s\nSHA-256: %s\nNext check: %s\n", target.Name, target.ResourceType, target.StatusCode, formatBytes(target.SnapshotSize), shortHash(target.SnapshotHash), formatTime(target.NextCheckAt))
+}
+
+func writeNewFile(path string, content []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("output file already exists: %s", path)
+		}
+		return fmt.Errorf("create output file: %w", err)
+	}
+	keep := false
+	defer func() {
+		if !keep {
+			_ = os.Remove(path)
+		}
+	}()
+	if _, err := file.Write(content); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write output file: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("sync output file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close output file: %w", err)
+	}
+	keep = true
+	return nil
+}
+
+func shortID(value string) string {
+	if len(value) > 12 {
+		return value[:12]
+	}
+	return value
 }
 
 func parseHeaders(values []string) (map[string]string, error) {

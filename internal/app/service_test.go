@@ -234,6 +234,51 @@ func TestRevisionDiffIgnoresFailureRows(t *testing.T) {
 	}
 }
 
+func TestChangesAndHistoricalRevisionDiff(t *testing.T) {
+	fake := &fakeFetcher{steps: []fetchStep{
+		{response: baselineResponse("const value=1")},
+		{response: baselineResponse("const value=2")},
+		{response: baselineResponse("const value=3")},
+	}}
+	service, _ := newTestService(t, fake)
+	now := time.Now().UTC()
+	service.now = func() time.Time { return now }
+	if _, err := service.Add(context.Background(), AddInput{Name: "app", URL: "https://cdn.example.com/app.js", Every: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		now = now.Add(time.Minute)
+		if _, err := service.CheckTarget(context.Background(), "app", true); err != nil {
+			t.Fatal(err)
+		}
+	}
+	changes, err := service.Changes("app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changes) != 2 || changes[0].ID == "" || changes[1].ID == "" {
+		t.Fatalf("changes = %#v", changes)
+	}
+	older := changes[1]
+	revision, err := service.RevisionDiffAt("app", older.ID[:12])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if revision.Current.ID != older.ID || !strings.Contains(revision.Diff.Text, "value = 1") || !strings.Contains(revision.Diff.Text, "value = 2") || strings.Contains(revision.Diff.Text, "value = 3") {
+		t.Fatalf("historical diff = %#v\n%s", revision.Current, revision.Diff.Text)
+	}
+	latest, err := service.RevisionDiff("app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.Current.ID != changes[0].ID {
+		t.Fatalf("latest = %q, want %q", latest.Current.ID, changes[0].ID)
+	}
+	if _, err := service.RevisionDiffAt("app", "missing"); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("missing change error = %v", err)
+	}
+}
+
 type overlappingFetcher struct {
 	calls    atomic.Int32
 	entered  atomic.Int32

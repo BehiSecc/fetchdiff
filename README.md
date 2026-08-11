@@ -76,7 +76,10 @@ fetchdiff check --force
 fetchdiff check production-js --force
 fetchdiff remove production-js
 fetchdiff history production-js
+fetchdiff changes production-js
 fetchdiff diff production-js
+fetchdiff diff production-js --change CHANGE_ID
+fetchdiff diff production-js --change CHANGE_ID --output change.html
 fetchdiff status
 fetchdiff doctor
 ```
@@ -91,6 +94,8 @@ fetchdiff doctor
 - `check --force` checks every target now; `check NAME --force` checks one target now.
 - `remove NAME` deletes a target, its history, and its queued notifications.
 - `history NAME --limit 50` controls displayed history; zero shows everything.
+- `changes NAME` lists content changes and their IDs; `--limit 0` shows all.
+- `diff NAME --change ID` selects one change; `--output FILE` writes it (`.html` creates the visual report).
 - `--timeout 30s`, `--max-retries 3`, and `--max-redirects 10` control HTTP behavior.
 - `--user-agent "MyMonitor/1.0"` changes the User-Agent for the current process.
 - `--data-dir PATH` or `FETCHDIFF_DATA_DIR` changes the state directory.
