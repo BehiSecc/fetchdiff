@@ -18,7 +18,8 @@ This creates the private database, snapshots directory, and provider configurati
 ```sh
 fetchdiff add https://cdn.example.com/app.js \
   --name production-js \
-  --every 24h
+  --every 24h \
+  --note "Production bundle"
 ```
 
 Intervals support minutes, hours, days, weeks, and combinations: `30m`, `24h`, `7d`, `2w`, or `1w2d`.
@@ -71,6 +72,8 @@ sudo systemctl restart fetchdiff
 ```sh
 fetchdiff list
 fetchdiff show production-js
+fetchdiff update production-js --note "Reviewed by the web team"
+fetchdiff update production-js --note ""  # clear the note
 fetchdiff check
 fetchdiff check --force
 fetchdiff check production-js --force
@@ -84,11 +87,12 @@ fetchdiff status
 fetchdiff doctor
 ```
 
-`fetchdiff list` shows a compact colored table; set `NO_COLOR=1` to disable color. Use `fetchdiff show NAME` for the full URL and metadata. `fetchdiff check` checks due targets once and exits, while `fetchdiff watch` runs continuously.
+`fetchdiff list` shows a compact colored table; set `NO_COLOR=1` to disable color. Use `fetchdiff show NAME` for the full URL, note, and metadata. Each target has one editable note, which stays out of the compact list. `fetchdiff check` checks due targets once and exits, while `fetchdiff watch` runs continuously.
 
 ## Useful flags
 
 - `--name production-js` sets a target's unique name.
+- `add --note "Production bundle"` saves a note with a new target; `update NAME --note "..."` replaces it.
 - `--every DURATION` sets the check interval.
 - `--header "Name: value"` stores a repeatable request header with the target.
 - `check --force` checks every target now; `check NAME --force` checks one target now.

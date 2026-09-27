@@ -19,6 +19,7 @@ type Target struct {
 	Revision             uint64            `json:"revision"`
 	Name                 string            `json:"name"`
 	URL                  string            `json:"url"`
+	Note                 string            `json:"note,omitempty"`
 	Every                time.Duration     `json:"every"`
 	Headers              map[string]string `json:"headers,omitempty"`
 	CreatedAt            time.Time         `json:"created_at"`

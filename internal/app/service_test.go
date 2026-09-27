@@ -336,6 +336,56 @@ func TestOverlappingChecksCannotRollBackState(t *testing.T) {
 	}
 }
 
+type noteEditFetcher struct {
+	calls   atomic.Int32
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (f *noteEditFetcher) Fetch(_ context.Context, _ fetch.Request) (fetch.Response, error) {
+	call := f.calls.Add(1)
+	if call == 1 {
+		return baselineResponse("const value=1"), nil
+	}
+	if call == 2 {
+		close(f.entered)
+		<-f.release
+	}
+	return baselineResponse("const value=2"), nil
+}
+
+func TestNoteEditDuringCheckIsPreserved(t *testing.T) {
+	fake := &noteEditFetcher{entered: make(chan struct{}), release: make(chan struct{})}
+	service, state := newTestService(t, fake)
+	if _, err := service.Add(context.Background(), AddInput{Name: "app", URL: "https://cdn.example.com/app.js", Every: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	checkDone := make(chan error, 1)
+	go func() {
+		_, err := service.CheckTarget(context.Background(), "app", true)
+		checkDone <- err
+	}()
+	<-fake.entered
+	updated, err := service.SetNote("APP", "  Reviewed by the web team  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Note != "Reviewed by the web team" {
+		t.Fatalf("updated note = %q", updated.Note)
+	}
+	close(fake.release)
+	if err := <-checkDone; err != nil {
+		t.Fatal(err)
+	}
+	target, err := state.Target("app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Note != updated.Note || fake.calls.Load() != 3 {
+		t.Fatalf("note after concurrent check = %q, fetch calls = %d", target.Note, fake.calls.Load())
+	}
+}
+
 func TestChangedCheckQueuesHTMLReportAtomically(t *testing.T) {
 	fake := &fakeFetcher{steps: []fetchStep{
 		{response: baselineResponse(`function value(){return 1}`)},

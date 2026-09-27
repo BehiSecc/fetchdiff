@@ -116,6 +116,50 @@ func TestCommandWorkflow(t *testing.T) {
 	}
 }
 
+func TestTargetNoteWorkflow(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript")
+		_, _ = io.WriteString(w, "const value = 1;")
+	}))
+	defer server.Close()
+
+	dataDir := filepath.Join(t.TempDir(), "state")
+	run := func(args ...string) (string, error) {
+		var output bytes.Buffer
+		command := newRootCommand(&output, &output)
+		command.SetArgs(append([]string{"--data-dir", dataDir}, args...))
+		err := command.Execute()
+		return output.String(), err
+	}
+	if output, err := run("add", server.URL+"/app.js", "--name", "app", "--note", "Production bundle"); err != nil {
+		t.Fatalf("add: %v\n%s", err, output)
+	}
+	if output, err := run("show", "app"); err != nil || !strings.Contains(output, "Note:") || !strings.Contains(output, "Production bundle") {
+		t.Fatalf("show initial note: %v\n%s", err, output)
+	}
+	if output, err := run("list"); err != nil || strings.Contains(output, "Production bundle") {
+		t.Fatalf("list should omit note: %v\n%s", err, output)
+	}
+	if _, err := run("update", "app"); err == nil {
+		t.Fatal("update without --note should fail")
+	}
+	if output, err := run("update", "app", "--note", "Reviewed by the web team"); err != nil || !strings.Contains(output, "Updated note") {
+		t.Fatalf("update note: %v\n%s", err, output)
+	}
+	if output, err := run("check", "app", "--force"); err != nil {
+		t.Fatalf("check after note edit: %v\n%s", err, output)
+	}
+	if output, err := run("show", "app"); err != nil || !strings.Contains(output, "Reviewed by the web team") || strings.Contains(output, "Production bundle") {
+		t.Fatalf("show updated note: %v\n%s", err, output)
+	}
+	if output, err := run("update", "app", "--note", ""); err != nil || !strings.Contains(output, "Cleared note") {
+		t.Fatalf("clear note: %v\n%s", err, output)
+	}
+	if output, err := run("show", "app"); err != nil || strings.Contains(output, "Note:") {
+		t.Fatalf("show cleared note: %v\n%s", err, output)
+	}
+}
+
 func TestHistoricalChangeSelectionAndFileOutput(t *testing.T) {
 	var version atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

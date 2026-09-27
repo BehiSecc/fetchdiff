@@ -134,6 +134,9 @@ func renderTargetDetails(out io.Writer, target model.Target, colors bool) {
 	writeDetail(out, p, "Type", target.ResourceType)
 	writeDetail(out, p, "Interval", compactDuration(target.Every))
 	writeDetail(out, p, "URL", target.URL)
+	if target.Note != "" {
+		writeDetail(out, p, "Note", target.Note)
+	}
 	if target.EffectiveURL != "" && target.EffectiveURL != target.URL {
 		writeDetail(out, p, "Effective URL", target.EffectiveURL)
 	}
@@ -160,7 +163,11 @@ func renderTargetDetails(out io.Writer, target model.Target, colors bool) {
 }
 
 func writeDetail(out io.Writer, p palette, label, value string) {
-	fmt.Fprintf(out, "%s  %s\n", p.paint(ansiBoldCyan, padRight(label+":", 14)), value)
+	lines := strings.Split(value, "\n")
+	fmt.Fprintf(out, "%s  %s\n", p.paint(ansiBoldCyan, padRight(label+":", 14)), lines[0])
+	for _, line := range lines[1:] {
+		fmt.Fprintf(out, "%16s%s\n", "", line)
+	}
 }
 
 func healthColor(target model.Target) string {

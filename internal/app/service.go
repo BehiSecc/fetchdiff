@@ -40,6 +40,7 @@ type Service struct {
 type AddInput struct {
 	Name    string
 	URL     string
+	Note    string
 	Every   time.Duration
 	Headers map[string]string
 }
@@ -104,6 +105,10 @@ func (s *Service) Remove(name string) (model.Target, error) {
 	return s.store.DeleteTarget(strings.TrimSpace(name))
 }
 
+func (s *Service) SetNote(name, note string) (model.Target, error) {
+	return s.store.SetTargetNote(strings.TrimSpace(name), strings.TrimSpace(note))
+}
+
 func (s *Service) Add(ctx context.Context, input AddInput) (model.Target, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	if !targetNamePattern.MatchString(input.Name) {
@@ -138,6 +143,7 @@ func (s *Service) Add(ctx context.Context, input AddInput) (model.Target, error)
 		Revision:      1,
 		Name:          input.Name,
 		URL:           input.URL,
+		Note:          strings.TrimSpace(input.Note),
 		Every:         input.Every,
 		Headers:       input.Headers,
 		CreatedAt:     now,

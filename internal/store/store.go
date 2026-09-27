@@ -160,6 +160,35 @@ func (s *Store) UpdateTarget(target model.Target, expectedRevision uint64, entri
 	return s.CommitTarget(target, expectedRevision, entries, nil)
 }
 
+func (s *Store) SetTargetNote(nameOrID, note string) (model.Target, error) {
+	db, err := s.open()
+	if err != nil {
+		return model.Target{}, err
+	}
+	defer db.Close()
+	var target model.Target
+	err = db.Update(func(tx *bolt.Tx) error {
+		id := []byte(nameOrID)
+		if indexed := tx.Bucket(namesBucket).Get([]byte(strings.ToLower(nameOrID))); indexed != nil {
+			id = append([]byte(nil), indexed...)
+		}
+		data := tx.Bucket(targetsBucket).Get(id)
+		if data == nil {
+			return fmt.Errorf("target %q not found", nameOrID)
+		}
+		if err := json.Unmarshal(data, &target); err != nil {
+			return fmt.Errorf("decode target: %w", err)
+		}
+		if target.Note == note {
+			return nil
+		}
+		target.Note = note
+		target.Revision++
+		return putJSON(tx.Bucket(targetsBucket), id, target)
+	})
+	return target, err
+}
+
 func (s *Store) CommitTarget(target model.Target, expectedRevision uint64, entries []model.HistoryEntry, notifications []model.Notification) error {
 	db, err := s.open()
 	if err != nil {

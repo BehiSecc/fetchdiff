@@ -54,6 +54,7 @@ func TestRenderTargetTableColorsWhenEnabled(t *testing.T) {
 func TestRenderTargetDetailsIncludesFullMetadata(t *testing.T) {
 	target := model.Target{
 		Name: "production-js", URL: "https://cdn.example.com/assets/app.js", ResourceType: model.ResourceJavaScript,
+		Note:  "Primary bundle\nReviewed by the web team",
 		Every: 24 * time.Hour, StatusCode: 200, SnapshotSize: 188416,
 		SnapshotHash: strings.Repeat("a", 64), CreatedAt: time.Date(2026, 8, 7, 10, 0, 0, 0, time.UTC),
 		LastCheckedAt: time.Date(2026, 8, 7, 11, 0, 0, 0, time.UTC), NextCheckAt: time.Date(2026, 8, 8, 11, 0, 0, 0, time.UTC),
@@ -61,7 +62,7 @@ func TestRenderTargetDetailsIncludesFullMetadata(t *testing.T) {
 	var output bytes.Buffer
 	renderTargetDetails(&output, target, false)
 	text := output.String()
-	for _, expected := range []string{target.Name, target.URL, "● Healthy", "JavaScript", "24h", "200 OK", "184.0 KB", target.SnapshotHash, "2026-08-08 11:00 UTC"} {
+	for _, expected := range []string{target.Name, target.URL, "● Healthy", "JavaScript", "24h", "200 OK", "184.0 KB", target.SnapshotHash, "2026-08-08 11:00 UTC", "Note:           Primary bundle\n                Reviewed by the web team"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("details are missing %q:\n%s", expected, text)
 		}

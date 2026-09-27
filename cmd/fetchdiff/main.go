@@ -79,6 +79,7 @@ func newRootCommand(out, errOut io.Writer) *cobra.Command {
 	root.AddCommand(
 		c.initCommand(),
 		c.addCommand(),
+		c.updateCommand(),
 		c.removeCommand(),
 		c.checkCommand(),
 		c.watchCommand(),
@@ -212,6 +213,7 @@ func (r *runtime) drain(ctx context.Context) notifier.DispatchReport {
 
 func (c *cli) addCommand() *cobra.Command {
 	var name string
+	var note string
 	var every string
 	var rawHeaders []string
 	command := &cobra.Command{
@@ -231,7 +233,7 @@ func (c *cli) addCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			target, err := runtime.service.Add(cmd.Context(), app.AddInput{Name: name, URL: args[0], Every: interval, Headers: headers})
+			target, err := runtime.service.Add(cmd.Context(), app.AddInput{Name: name, URL: args[0], Note: note, Every: interval, Headers: headers})
 			if err != nil {
 				return err
 			}
@@ -240,9 +242,38 @@ func (c *cli) addCommand() *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&name, "name", "", "unique target name")
+	command.Flags().StringVar(&note, "note", "", "note for this target")
 	command.Flags().StringVar(&every, "every", "24h", "check interval (for example 30m, 24h, 7d, or 2w)")
 	command.Flags().StringArrayVar(&rawHeaders, "header", nil, "request header in 'Name: value' form (repeatable)")
 	_ = command.MarkFlagRequired("name")
+	return command
+}
+
+func (c *cli) updateCommand() *cobra.Command {
+	var note string
+	command := &cobra.Command{
+		Use:   "update NAME",
+		Short: "Update a target's note",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			runtime, err := c.open()
+			if err != nil {
+				return err
+			}
+			target, err := runtime.service.SetNote(args[0], note)
+			if err != nil {
+				return err
+			}
+			if target.Note == "" {
+				fmt.Fprintf(c.out, "✓ Cleared note for %s.\n", target.Name)
+			} else {
+				fmt.Fprintf(c.out, "✓ Updated note for %s.\n", target.Name)
+			}
+			return nil
+		},
+	}
+	command.Flags().StringVar(&note, "note", "", "new note (empty text clears it)")
+	_ = command.MarkFlagRequired("note")
 	return command
 }
 
