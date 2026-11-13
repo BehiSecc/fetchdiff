@@ -40,6 +40,15 @@ func TestRenderTargetTableIsCompactAndAligned(t *testing.T) {
 	}
 }
 
+func TestRenderTargetTableKeepsFullNames(t *testing.T) {
+	name := "Google-Cloud-PartnerHub-phAccountSettingsBundle"
+	var output bytes.Buffer
+	renderTargetTable(&output, []model.Target{{Name: name, ResourceType: model.ResourceJavaScript, Every: time.Hour, URL: "https://www.gstatic.com/a/b/m=base"}}, false)
+	if !strings.Contains(output.String(), " "+name+" ") {
+		t.Fatalf("table truncated target name %q:\n%s", name, output.String())
+	}
+}
+
 func TestRenderTargetTableColorsWhenEnabled(t *testing.T) {
 	var output bytes.Buffer
 	renderTargetTable(&output, []model.Target{{Name: "app", ResourceType: model.ResourceJavaScript, Every: time.Hour, URL: "https://example.com/app.js"}}, true)

@@ -64,7 +64,7 @@ func renderTargetTable(out io.Writer, targets []model.Target, colors bool) {
 	rows := make([]targetTableRow, 0, len(targets))
 	for _, target := range targets {
 		rows = append(rows, targetTableRow{
-			name: truncateEnd(target.Name, 30), resourceType: shortResourceType(target.ResourceType),
+			name: target.Name, resourceType: shortResourceType(target.ResourceType),
 			every: compactDuration(target.Every), health: tableHealth(target),
 			source: truncateMiddle(compactSource(target.URL), 44), failing: target.ConsecutiveFailures > 0,
 		})
@@ -262,17 +262,6 @@ func compactSource(rawURL string) string {
 		return host
 	}
 	return host + "/…/" + filename
-}
-
-func truncateEnd(value string, maximum int) string {
-	runes := []rune(value)
-	if len(runes) <= maximum {
-		return value
-	}
-	if maximum <= 1 {
-		return "…"
-	}
-	return string(runes[:maximum-1]) + "…"
 }
 
 func truncateMiddle(value string, maximum int) string {
